@@ -12,6 +12,11 @@ let currentCLIRootDir = ''; // 暂存由本地 CLI 握手发送过来的根工�
 let currentConvId = ''; // 当前对话的唯一标识
 let currentConvExecutedIds = new Set(); // 当前对话已执行过的指令 ID 强缓存 Set
 
+// 多流程任务队列控制变量
+let activeTaskQueue = []; // 当前处于待执行状态的子任务队列
+let queueResultsCollector = []; // 已执行完的子任务结果汇总
+let isQueueModeActive = false; // 是否处于队列执行模式
+
 // 安全读取存储 (防 context invalidated 崩溃)
 function safeGetStorage(keys, callback) {
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
@@ -637,11 +642,14 @@ function generateInitPrompt(workDir, skillsDir) {
     prompt += `   你应先 list_skills 了解有哪些可用技能，再决定是否加载和运行。\n\n`;
   }
   
-  prompt += `3. **指令格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出，不得出现在代码块之外：\n`;
-  prompt += `\`\`\`glab-call\n{\n  "id": "本次操作的唯一字符串ID",\n  "action": "<操作名>",\n  "params": { ... }\n}\n\`\`\`\n\n`;
+  prompt += `3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出。你可以选择以下两种方式之一：\n\n`;
+  prompt += `   **A. 单步执行指令**（单条 JSON 对象）：\n`;
+  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "<操作名>",\n     "params": { ... }\n   }\n   \`\`\`\n\n`;
+  prompt += `   **B. 多步骤任务队列**（推荐！当任务需要多步才能完成时，例如先读目录再读文件，或同时修改/创建多个文件，你可以打包成 JSON 数组在单个代码块中发出，或者输出多个独立的 glab-call 代码块。它们会依次串行执行并统一汇总结果）：\n`;
+  prompt += `   \`\`\`glab-call\n   [\n     {\n       "id": "唯一ID1",\n       "action": "<操作名1>",\n       "params": { ... }\n     },\n     {\n       "id": "唯一ID2",\n       "action": "<操作名2>",\n       "params": { ... }\n     }\n   ]\n   \`\`\`\n\n`;
   prompt += `**可用操作速查表**：\n`;
   prompt += `- \`list_dir\`：列目录。params: { "path": "..." }\n`;
-  prompt += `- \`read_file\`：读文件。params: { "path": "..." }\n`;
+  prompt += `- \`read_file\`：读文件. params: { "path": "..." }\n`;
   prompt += `- \`write_file\`：新建文件（若已存在则报错）。params: { "path": "...", "content": "..." }\n`;
   prompt += `- \`update_file\` (覆盖)：整体覆盖写入。params: { "path": "...", "mode": "overwrite", "content": "完整新内容" }\n`;
   prompt += `- \`update_file\` (补丁)：局部替换。params: { "path": "...", "mode": "patch", "patches": [{ "find": "原文", "replace": "新文" }] }\n`;
@@ -649,7 +657,7 @@ function generateInitPrompt(workDir, skillsDir) {
   if (skillsDir) {
     prompt += `- \`list_skills\` / \`load_skill\` / \`run_skill\`：Skills 相关操作。\n`;
   }
-  prompt += `\n4. **等待反馈**：每次输出 \`\`\`glab-call 指令后，停止继续输出，等待我将本地执行结果回传给你，再继续后续步骤。\n\n`;
+  prompt += `\n4. **等待反馈**：每次输出 \`\`\`glab-call 指令（或指令列表）后，停止继续输出，等待我将本地执行结果（若为多步骤，则是汇总结果）回传给你，再根据执行结论继续完成后续任务。\n\n`;
   prompt += `已准备就绪，工作目录已锁定为：${workDir}${skillsDir ? `，Skills 目录为：${skillsDir}` : ''}`;
   return prompt;
 }
@@ -790,13 +798,74 @@ function handleCLIResponse(response) {
   const { id, status, data, error } = response;
   logToTerminal(`收到执行结果 [${id}]: ${status}`);
 
-  let feedbackText = `【GLAB 执行结果反馈】\n`;
-  feedbackText += `指令ID: ${id}\n`;
-  if (status === "success") {
-    feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
+  if (isQueueModeActive) {
+    // 队列模式：收集结果，触发串行队列中的下一项
+    queueResultsCollector.push(response);
+    
+    // 如果子任务执行失败，直接熔断（停止后续执行）并汇总回填结果
+    if (status === "error") {
+      logToTerminal(`[队列调度] 子任务 [${id}] 执行失败，触发队列熔断。`);
+      finishQueueExecution();
+    } else {
+      executeNextQueueTask();
+    }
   } else {
-    feedbackText += `执行状态: 失败\n原因: ${error}`;
+    // 常规单步模式：直接反馈回填
+    let feedbackText = `【GLAB 执行结果反馈】\n`;
+    feedbackText += `指令ID: ${id}\n`;
+    if (status === "success") {
+      feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
+    } else {
+      feedbackText += `执行状态: 失败\n原因: ${error}`;
+    }
+    replyToGemini(feedbackText);
   }
+}
+
+// ==========================================
+// 队列调度核心函数
+// ==========================================
+function executeNextQueueTask() {
+  if (activeTaskQueue.length === 0) {
+    finishQueueExecution();
+    return;
+  }
+
+  const currentTask = activeTaskQueue.shift();
+  logToTerminal(`[队列调度] 启动子任务 [${currentTask.action}] ID: ${currentTask.id}`);
+  handleInstructionFlow(currentTask);
+}
+
+function finishQueueExecution() {
+  logToTerminal("多流程任务队列执行结束，正在汇总结果并自动回填...");
+  
+  let feedbackText = `【GLAB 多流程任务执行结果汇总反馈】\n\n`;
+  
+  // 汇总已执行子任务结果
+  queueResultsCollector.forEach((res, index) => {
+    feedbackText += `### [子任务 ${index + 1}] ID: ${res.id} (${res.status === 'success' ? '🟢 成功' : '🔴 失败'})\n`;
+    if (res.status === "success") {
+      feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(res.data, null, 2)}\n\`\`\`\n\n`;
+    } else {
+      feedbackText += `执行状态: 失败\n原因: ${res.error}\n\n`;
+    }
+  });
+
+  // 如果队列中还有未执行的任务（因为前一步失败熔断或被用户拒绝），把它们也列出并标为“跳过”
+  if (activeTaskQueue.length > 0) {
+    feedbackText += `### 未执行子任务（由于前置任务失败或被用户拒绝而被跳过）：\n`;
+    activeTaskQueue.forEach((skippedTask, index) => {
+      feedbackText += `- 子任务 ID: ${skippedTask.id} (${skippedTask.action})\n`;
+    });
+    feedbackText += `\n`;
+  }
+
+  feedbackText += `【继续执行提示】请根据上述所有子任务的汇总执行结果，继续进行下一阶段的本地文件操作或完成后续任务。`;
+
+  // 重置队列缓存
+  isQueueModeActive = false;
+  activeTaskQueue = [];
+  queueResultsCollector = [];
 
   replyToGemini(feedbackText);
 }
@@ -810,7 +879,8 @@ function scanAndExecuteInstructions() {
   // 先同步加载当前 URL 对应会话下的已执行 ID 记录
   syncConvExecutedIds(() => {
     const codeBlocks = document.querySelectorAll('pre code:not([data-glab-processed])');
-    let foundCount = 0;
+    let pendingTasks = [];
+    let isTaskArrayParsed = false; // 是否解析到了显式的多任务数组
 
     codeBlocks.forEach((codeEl) => {
       const text = codeEl.textContent.trim();
@@ -821,38 +891,33 @@ function scanAndExecuteInstructions() {
         codeEl.setAttribute('data-glab-processed', 'true');
         
         try {
-          const request = JSON.parse(text);
-          const instructionId = request.id;
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed)) {
+            isTaskArrayParsed = true;
+            parsed.forEach((task) => {
+              if (task.id) {
+                if (!currentConvExecutedIds.has(task.id)) {
+                  pendingTasks.push(task);
+                } else {
+                  logToTerminal(`提示：多任务子项 [${task.id}] 已执行过，自动忽略。`);
+                }
+              } else {
+                logToTerminal("警告：多任务子项未包含有效 ID，安全起见拒绝执行。");
+              }
+            });
+          } else {
+            const instructionId = parsed.id;
+            if (!instructionId) {
+              logToTerminal("警告：指令未包含有效 ID，安全起见拒绝执行。");
+              return;
+            }
 
-          if (!instructionId) {
-            logToTerminal("警告：指令未包含有效 ID，安全起见拒绝执行。");
-            return;
+            if (currentConvExecutedIds.has(instructionId)) {
+              logToTerminal(`提示：指令 ID [${instructionId}] 在当前对话中已执行过，已自动跳过。`);
+              return;
+            }
+            pendingTasks.push(parsed);
           }
-
-          // 核心强缓存去重：检查当前对话名下的已执行记录
-          if (currentConvExecutedIds.has(instructionId)) {
-            logToTerminal(`提示：指令 ID [${instructionId}] 在当前对话中已执行过，已自动跳过。`);
-            return;
-          }
-
-          // 执行前标记为已处理并写入存储
-          foundCount++;
-          currentConvExecutedIds.add(instructionId);
-          const storageKey = `glab_history_${currentConvId}`;
-          const updatedList = Array.from(currentConvExecutedIds);
-
-          // 限制最大历史记录数量（比如每个对话只记最近的 300 条，防止持久化数据过大）
-          if (updatedList.length > 300) {
-            updatedList.splice(0, updatedList.length - 200);
-            currentConvExecutedIds = new Set(updatedList);
-          }
-
-          const saveObj = {};
-          saveObj[storageKey] = updatedList;
-          safeSetStorage(saveObj);
-
-          logToTerminal(`解析指令: [${request.action}] ID: ${request.id}`);
-          handleInstructionFlow(request);
         } catch (e) {
           console.error("[GLAB] 指令 JSON 解析失败:", e);
           updatePanelState('error', '指令解析错误');
@@ -861,11 +926,47 @@ function scanAndExecuteInstructions() {
       }
     });
 
-    if (foundCount === 0) {
-      autoRunDepth = 0;
-      updateDepthCounter();
-      updatePanelState('idle', '已就绪');
-      logToTerminal("未发现新指令，步骤深度已重置。");
+    if (pendingTasks.length > 0) {
+      // 写入存储强缓存
+      pendingTasks.forEach(task => currentConvExecutedIds.add(task.id));
+      const storageKey = `glab_history_${currentConvId}`;
+      const updatedList = Array.from(currentConvExecutedIds);
+      if (updatedList.length > 300) {
+        updatedList.splice(0, updatedList.length - 200);
+        currentConvExecutedIds = new Set(updatedList);
+      }
+      const saveObj = {};
+      saveObj[storageKey] = updatedList;
+      safeSetStorage(saveObj);
+
+      // 判断是否启动多流程队列模式：
+      // 如果解析到了数组，或者在同一个生成流中发现了多个待执行指令
+      if (isTaskArrayParsed || pendingTasks.length > 1) {
+        isQueueModeActive = true;
+        queueResultsCollector = [];
+        activeTaskQueue = pendingTasks;
+        
+        logToTerminal(`启动多流程队列模式，共 [${activeTaskQueue.length}] 个任务待执行。`);
+        
+        // 队列占用整体 1 个步骤深度
+        autoRunDepth++;
+        updateDepthCounter();
+        
+        executeNextQueueTask();
+      } else {
+        // 单步模式
+        isQueueModeActive = false;
+        const singleTask = pendingTasks[0];
+        logToTerminal(`解析指令: [${singleTask.action}] ID: ${singleTask.id}`);
+        handleInstructionFlow(singleTask);
+      }
+    } else {
+      if (!isQueueModeActive) {
+        autoRunDepth = 0;
+        updateDepthCounter();
+        updatePanelState('idle', '已就绪');
+        logToTerminal("未发现新指令，步骤深度已重置。");
+      }
     }
   });
 }
@@ -880,15 +981,19 @@ function handleInstructionFlow(request) {
   }
 
   if (readOnlyActions.includes(request.action)) {
-    autoRunDepth++;
-    updateDepthCounter();
+    if (!isQueueModeActive) {
+      autoRunDepth++;
+      updateDepthCounter();
+    }
     updatePanelState('executing', 'CLI 执行中');
     logToTerminal(`自动投递 [只读]: [${request.action}] ID: ${request.id}`);
     socket.send(JSON.stringify(request));
   } else {
     if (isAutoRunEnabled) {
-      autoRunDepth++;
-      updateDepthCounter();
+      if (!isQueueModeActive) {
+        autoRunDepth++;
+        updateDepthCounter();
+      }
       updatePanelState('executing', 'CLI 自动执行中');
       logToTerminal(`自动投递 [写入]: [${request.action}] ID: ${request.id}`);
       socket.send(JSON.stringify(request));
@@ -927,8 +1032,10 @@ function showConfirmUI(request) {
     updatePanelState('executing', '授权指令执行中');
     logToTerminal(`用户已批准指令: ${request.id}`);
     
-    autoRunDepth++;
-    updateDepthCounter();
+    if (!isQueueModeActive) {
+      autoRunDepth++;
+      updateDepthCounter();
+    }
     socket.send(JSON.stringify(request));
   };
 
@@ -936,6 +1043,15 @@ function showConfirmUI(request) {
     diffContainer.style.display = 'none';
     updatePanelState('idle', '已拒绝');
     logToTerminal(`用户已拒绝指令: ${request.id}`);
+    
+    if (isQueueModeActive) {
+      queueResultsCollector.push({
+        id: request.id,
+        status: "error",
+        error: "用户拒绝授权执行该敏感操作"
+      });
+      finishQueueExecution();
+    }
   };
 }
 
