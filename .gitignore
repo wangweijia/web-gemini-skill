@@ -1,0 +1,14 @@
+# Node modules
+node_modules/
+**/node_modules/
+cli/node_modules/
+
+# Test directories and local sandboxes
+testDir/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
