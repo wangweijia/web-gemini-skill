@@ -136,7 +136,7 @@ wss.on('error', (err) => {
   if (err.code === 'EADDRINUSE' || err.message.includes('EADDRINUSE')) {
     console.error(`\n\x1b[31m[错误] 端口 ${PORT} 已被占用，无法启动服务。\x1b[0m`);
     console.error(`请使用 --port=XXXX 命令行参数指定一个不同的空闲端口。`);
-    console.error(`例如: node server.js --work-dir=${safeRoot} --port=9004`);
+    console.error(`例如: node server.js --port=9004`);
     console.error(`并确保您在 Chrome 插件 GLAB 控制面板上的“WS 服务端口”也配置为相应的端口。`);
   } else {
     console.error(`\n\x1b[31m[错误] WebSocket 服务发生异常: ${err.message}\x1b[0m`);

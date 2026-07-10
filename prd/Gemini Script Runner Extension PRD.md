@@ -398,13 +398,13 @@ sequenceDiagram
 ## **4. 本地 CLI 服务端设计**
 
 ### **4.1 安全目录锁 (Path Jail)**
-为防止 AI 生成越权敏感路径，CLI 服务端对所有路径参数进行安全检查。服务启动时，**必须显式提供 `--work-dir` 参数定义根目录**，不使用 `process.cwd()` 作为安全根目录：
+为防止 AI 生成越权敏感路径，CLI 服务端对所有路径参数进行安全检查。在握手阶段，服务端会根据插件配置动态锁定工作目录：
 ```javascript
 let safeRoot = '';
 
-function initSafeRoot(dirParam) {
+function lockSafeRoot(dirParam) {
   if (!dirParam) {
-    throw new Error('启动本地 CLI 服务必须显式提供 --work-dir 参数');
+    throw new Error('未提供有效的工作目录以锁定');
   }
   safeRoot = path.resolve(dirParam);
 }
@@ -881,17 +881,10 @@ process.argv.slice(2).forEach(arg => {
 
 let safeRoot = '';
 const skillsDir = args['skills-dir'] ? path.resolve(args['skills-dir']) : '';
-
-if (!args['work-dir']) {
-  console.error("错误：启动本地 CLI 服务必须显式提供 --work-dir 参数");
-  process.exit(1);
-}
-safeRoot = path.resolve(args['work-dir']);
-
-const PORT = 9002;
+const PORT = args['port'] ? parseInt(args['port'], 10) : 9003;
 const wss = new WebSocket.Server({ port: PORT });
 console.log(`[GLAB CLI] 服务已启动。监听端口: ${PORT}`);
-console.log(`[GLAB CLI] 安全工作根目录: ${safeRoot}`);
+console.log(`[GLAB CLI] 工作根目录: 等待浏览器插件握手传入并锁定...`);
 console.log(`[GLAB CLI] Skills 目录: ${skillsDir || '未配置'}`);
 
 wss.on('connection', (ws) => {
@@ -906,17 +899,22 @@ wss.on('connection', (ws) => {
 
     const { id, action, params } = request;
 
-    // 双端路径握手一致性核对
+    // 握手：插件连接后，CLI 根据插件传入的工作目录进行锁定
     if (action === "shakehand") {
-      const pluginWorkDir = path.resolve(params.workDir || '');
-      if (pluginWorkDir !== safeRoot) {
+      if (params && params.workDir) {
+        safeRoot = path.resolve(params.workDir);
+        console.log(`[GLAB CLI] 握手成功！工作根目录已锁定: ${safeRoot}`);
+        ws.send(JSON.stringify({
+          action: "shakehand_reply",
+          status: "success",
+          data: { workDir: safeRoot, skillsDir }
+        }));
+      } else {
         ws.send(JSON.stringify({
           action: "shakehand_reply",
           status: "error",
-          data: { cliWorkDir: safeRoot, pluginWorkDir: params.workDir }
+          error: "未传入工作根目录"
         }));
-      } else {
-        ws.send(JSON.stringify({ action: "shakehand_reply", status: "success" }));
       }
       return;
     }

@@ -48,9 +48,9 @@ web-gemini-skill/
 cd cli
 npm install
 ```
-启动服务时，**必须显式提供 `--work-dir` 参数定义根目录**，并可选择性通过 `--skills-dir` 提供脚本技能目录：
+启动服务时，可选择性通过 `--skills-dir` 提供脚本技能目录，或者用 `--port` 指定自定义端口（默认为 9003）：
 ```bash
-node server.js --work-dir=/path/to/your/workspace --skills-dir=/path/to/your/skills
+node server.js --skills-dir=/path/to/your/skills
 ```
 
 ### 3. 初始化连接与运行
