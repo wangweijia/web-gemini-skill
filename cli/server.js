@@ -254,6 +254,30 @@ async function executeAction(action, params) {
       return { message: "写入成功", path: params.path };
     }
 
+    case 'write_file_chunk': {
+      const targetPath = getSafePath(params.path);
+      const tmpPath = targetPath + '.tmp';
+      const chunkIndex = parseInt(params.chunkIndex, 10);
+      const totalChunks = parseInt(params.totalChunks, 10);
+
+      if (chunkIndex === 0) {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(tmpPath, params.content || '', 'utf-8');
+      } else {
+        if (!fs.existsSync(tmpPath)) {
+          throw new Error(`分片写入错误：未找到初始分片生成的临时缓存文件 [${tmpPath}]`);
+        }
+        fs.appendFileSync(tmpPath, params.content || '', 'utf-8');
+      }
+
+      if (chunkIndex === totalChunks - 1) {
+        fs.renameSync(tmpPath, targetPath);
+        return { message: "全部分片写入完成", path: params.path };
+      }
+
+      return { message: `分片 ${chunkIndex + 1}/${totalChunks} 写入成功`, path: params.path };
+    }
+
     case 'update_file': {
       const targetPath = getSafePath(params.path);
       // mode 未指定但有 content 字段时，默认回退为 overwrite

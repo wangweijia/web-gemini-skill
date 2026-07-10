@@ -12,6 +12,10 @@ let currentCLIRootDir = ''; // 暂存由本地 CLI 握手发送过来的根工�
 let currentConvId = ''; // 当前对话的唯一标识
 let currentConvExecutedIds = new Set(); // 当前对话已执行过的指令 ID 强缓存 Set
 
+// 分片写入状态跟踪相关变量
+const approvedChunkPaths = new Set(); // 缓存已由用户手动确认的分片写入路径
+const activeChunkWrites = new Map();  // 暂存执行中的分片指令 ID 到文件路径的映射
+
 // 多流程任务队列控制变量
 let activeTaskQueue = []; // 当前处于待执行状态的子任务队列
 let queueResultsCollector = []; // 已执行完的子任务结果汇总
@@ -689,13 +693,14 @@ function generateInitPrompt(workDir, skillsDir) {
   
   prompt += `3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出。每个指令对象中可以包含可选的 \`autoSend\` 参数（布尔值，默认 \`true\`）。如果设为 \`false\`，指令执行完毕回填后**不会**自动提交，方便你等待用户手动输入或确认；如果设为 \`true\`，回填后会自动发送。你可以选择以下两种方式之一：\n\n`;
   prompt += `   **A. 单步执行指令**（单条 JSON 对象）：\n`;
-  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "list_dir | read_file | write_file | update_file | run_code | run_command | paste_file | list_skills | load_skill | run_skill",\n     "params": { ... },\n     "autoSend": true\n   }\n   \`\`\`\n\n`;
+  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "list_dir | read_file | write_file | write_file_chunk | update_file | run_code | run_command | paste_file | list_skills | load_skill | run_skill",\n     "params": { ... },\n     "autoSend": true\n   }\n   \`\`\`\n\n`;
   prompt += `   **B. 多步骤任务队列**（推荐！当任务需要多步才能完成时，例如先读目录再读文件，或同时修改/创建多个文件，你可以打包成 JSON 数组在单个代码块中发出，或者输出多个独立的 glab-call 代码块。它们会依次串行执行并统一汇总结果）：\n`;
   prompt += `   \`\`\`glab-call\n   [\n     {\n       "id": "唯一ID1",\n       "action": "<操作名1>",\n       "params": { ... }\n     },\n     {\n       "id": "唯一ID2",\n       "action": "<操作名2>",\n       "params": { ... },\n       "autoSend": false\n     }\n   ]\n   \`\`\`\n\n`;
   prompt += `**可用操作速查表**：\n`;
   prompt += `- \`list_dir\`：列目录。params: { "path": "..." }\n`;
   prompt += `- \`read_file\`：读文件. params: { "path": "..." }\n`;
   prompt += `- \`write_file\`：新建文件（若已存在则报错）。params: { "path": "...", "content": "..." }\n`;
+  prompt += `- \`write_file_chunk\`：分批次写入文件（适用于内容过长即 >4KB 或 >80 行的情形）。你需要按 \`chunkIndex\` 从 0 到 \`totalChunks - 1\` 的顺序依次发送。params: { "path": "...", "chunkIndex": 0, "totalChunks": 3, "content": "当前分片文本内容" }\n`;
   prompt += `- \`update_file\` (覆盖)：整体覆盖写入。params: { "path": "...", "mode": "overwrite", "content": "完整新内容" }\n`;
   prompt += `- \`update_file\` (补丁)：局部替换。params: { "path": "...", "mode": "patch", "patches": [{ "find": "原文", "replace": "新文" }] }\n`;
   prompt += `- \`run_code\`：执行代码片段. params: { "code": "..." }\n`;
@@ -704,7 +709,8 @@ function generateInitPrompt(workDir, skillsDir) {
   if (skillsDir) {
     prompt += `- \`list_skills\` / \`load_skill\` / \`run_skill\`：Skills 相关操作。\n`;
   }
-  prompt += `\n4. **等待反馈**：每次输出 \`\`\`glab-call 指令（或指令列表）后，停止继续输出，等待我将本地执行结果（若为多步骤，则是汇总结果）回传给你，再根据执行结论继续完成后续任务。\n\n`;
+  prompt += `\n4. **长文本写入策略**：当你需要新建或覆盖写入的文件内容大于 4KB 或 80 行时，**请务必不要**直接使用 \`write_file\` 或 \`update_file (overwrite)\` 一次性输出，因为这容易在前端触发 Markdown 渲染错误（如渲染成 Canvas）或因超出最大输出 token 而被中途截断。你必须主动选择 \`write_file_chunk\` 将内容按顺序拆分为数个分片进行分批次写入。每个分片内容应控制在 4KB / 80 行以内。\n\n`;
+  prompt += `5. **等待反馈**：每次输出 \`\`\`glab-call 指令（或指令列表）后，停止继续输出，等待我将本地执行结果（若为多步骤，则是汇总结果）回传给你，再根据执行结论继续完成后续任务。\n\n`;
   prompt += `已准备就绪，工作目录已锁定为：${workDir}${skillsDir ? `，Skills 目录为：${skillsDir}` : ''}`;
   return prompt;
 }
@@ -921,6 +927,18 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
 async function handleCLIResponse(response) {
   const { id, action, status, data, error, autoSend } = response;
   logToTerminal(`收到执行结果 [${id}]: ${status} (autoSend: ${autoSend})`);
+
+  // 分片写入自动授权缓存的清理
+  if (action === 'write_file_chunk') {
+    const path = activeChunkWrites.get(id);
+    if (path) {
+      activeChunkWrites.delete(id);
+      if (status === 'error' || (status === 'success' && data && data.message === '全部分片写入完成')) {
+        approvedChunkPaths.delete(path);
+        logToTerminal(`分片写入结束或出错，清理缓存授权路径: ${path}`);
+      }
+    }
+  }
 
   if (isQueueModeActive) {
     // 如果是 paste_file 成功，我们将其解析并暂存在 queueFilesToPaste 中
@@ -1163,6 +1181,14 @@ function scanAndExecuteInstructions() {
   });
 }
 
+// 向 CLI 发送指令，并在发送分片写入时暂存映射关系
+function sendRequestToCLI(request) {
+  if (request.action === 'write_file_chunk' && request.params) {
+    activeChunkWrites.set(request.id, request.params.path);
+  }
+  socket.send(JSON.stringify(request));
+}
+
 function handleInstructionFlow(request) {
   const readOnlyActions = ['list_dir', 'read_file', 'list_skills', 'load_skill', 'paste_file'];
 
@@ -1172,6 +1198,12 @@ function handleInstructionFlow(request) {
     return;
   }
 
+  // 检查是否是已被用户手动授权的后续分片（chunkIndex > 0 且路径已批准）
+  const isApprovedChunk = request.action === 'write_file_chunk' &&
+                          request.params &&
+                          request.params.chunkIndex > 0 &&
+                          approvedChunkPaths.has(request.params.path);
+
   if (readOnlyActions.includes(request.action)) {
     if (!isQueueModeActive) {
       autoRunDepth++;
@@ -1179,16 +1211,16 @@ function handleInstructionFlow(request) {
     }
     updatePanelState('executing', 'CLI 执行中');
     logToTerminal(`自动投递 [只读]: [${request.action}] ID: ${request.id}`);
-    socket.send(JSON.stringify(request));
+    sendRequestToCLI(request);
   } else {
-    if (isAutoRunEnabled) {
+    if (isAutoRunEnabled || isApprovedChunk) {
       if (!isQueueModeActive) {
         autoRunDepth++;
         updateDepthCounter();
       }
-      updatePanelState('executing', 'CLI 自动执行中');
-      logToTerminal(`自动投递 [写入]: [${request.action}] ID: ${request.id}`);
-      socket.send(JSON.stringify(request));
+      updatePanelState('executing', isApprovedChunk ? 'CLI 自动执行中 (分片追加)' : 'CLI 自动执行中');
+      logToTerminal(`自动投递 [写入${isApprovedChunk ? '分片' : ''}]: [${request.action}] ID: ${request.id}`);
+      sendRequestToCLI(request);
     } else {
       updatePanelState('pending', '等待授权确认');
       logToTerminal(`指令挂起等待授权: [${request.action}] ID: ${request.id}`);
@@ -1224,11 +1256,17 @@ function showConfirmUI(request) {
     updatePanelState('executing', '授权指令执行中');
     logToTerminal(`用户已批准指令: ${request.id}`);
     
+    // 如果是分片写入的第 0 片被批准，将路径记录到 approvedChunkPaths 中
+    if (request.action === 'write_file_chunk' && request.params && request.params.chunkIndex === 0) {
+      approvedChunkPaths.add(request.params.path);
+      logToTerminal(`分片写入被授权，路径已加入缓存: ${request.params.path}`);
+    }
+
     if (!isQueueModeActive) {
       autoRunDepth++;
       updateDepthCounter();
     }
-    socket.send(JSON.stringify(request));
+    sendRequestToCLI(request);
   };
 
   document.getElementById('glab-btn-reject').onclick = () => {
@@ -1236,6 +1274,11 @@ function showConfirmUI(request) {
     updatePanelState('idle', '已拒绝');
     logToTerminal(`用户已拒绝指令: ${request.id}`);
     
+    // 如果用户拒绝，且是分片写入，清理对应路径的授权缓存
+    if (request.action === 'write_file_chunk' && request.params) {
+      approvedChunkPaths.delete(request.params.path);
+    }
+
     if (isQueueModeActive) {
       queueResultsCollector.push({
         id: request.id,
