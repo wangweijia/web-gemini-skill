@@ -1018,42 +1018,67 @@ function scanAndExecuteInstructions() {
 
   // 先同步加载当前 URL 对应会话下的已执行 ID 记录
   syncConvExecutedIds(() => {
-    const codeBlocks = document.querySelectorAll('pre code:not([data-glab-processed])');
+    const unprocessedBlocks = document.querySelectorAll('pre code:not([data-glab-processed])');
+    if (unprocessedBlocks.length === 0) return;
+
+    // 获取页面中所有的 GLAB 代码块，以便建立稳定的序号序列（保证页面刷新后历史任务 ID 映射的稳定性）
+    const allCodeBlocks = Array.from(document.querySelectorAll('pre code'));
+    const glabBlocks = allCodeBlocks.filter(codeEl => {
+      const text = codeEl.textContent.trim();
+      const isGlabClass = codeEl.classList.contains('language-glab-call');
+      const hasInstructionKeywords = text.includes('"action"') && text.includes('"params"');
+      return isGlabClass || hasInstructionKeywords;
+    });
+
     let pendingTasks = [];
     let isTaskArrayParsed = false; // 是否解析到了显式的多任务数组
 
-    codeBlocks.forEach((codeEl) => {
+    unprocessedBlocks.forEach((codeEl) => {
       const text = codeEl.textContent.trim();
       const isGlabClass = codeEl.classList.contains('language-glab-call');
       const hasInstructionKeywords = text.includes('"action"') && text.includes('"params"');
 
       if (isGlabClass || hasInstructionKeywords) {
         codeEl.setAttribute('data-glab-processed', 'true');
+        const blockIndex = glabBlocks.indexOf(codeEl);
         
         try {
           const parsed = JSON.parse(text);
           if (Array.isArray(parsed)) {
             isTaskArrayParsed = true;
-            parsed.forEach((task) => {
-              if (task.id) {
-                if (!currentConvExecutedIds.has(task.id)) {
+            parsed.forEach((task, index) => {
+              const originalId = task.id;
+              if (originalId) {
+                // 重写 ID 附加稳定序号后缀，确保重复内容 ID 的唯一性
+                const uniqueId = `${originalId}_seq_${blockIndex}_${index}`;
+                task.id = uniqueId;
+
+                // 兼容性校验：检查 uniqueId 或原始 originalId 是否已执行过
+                const alreadyExecuted = currentConvExecutedIds.has(uniqueId) || currentConvExecutedIds.has(originalId);
+                if (!alreadyExecuted) {
                   pendingTasks.push(task);
                 } else {
-                  logToTerminal(`提示：多任务子项 [${task.id}] 已执行过，自动忽略。`);
+                  logToTerminal(`提示：多任务子项 [${uniqueId}] 已执行过，自动忽略。`);
                 }
               } else {
                 logToTerminal("警告：多任务子项未包含有效 ID，安全起见拒绝执行。");
               }
             });
           } else {
-            const instructionId = parsed.id;
-            if (!instructionId) {
+            const originalId = parsed.id;
+            if (!originalId) {
               logToTerminal("警告：指令未包含有效 ID，安全起见拒绝执行。");
               return;
             }
 
-            if (currentConvExecutedIds.has(instructionId)) {
-              logToTerminal(`提示：指令 ID [${instructionId}] 在当前对话中已执行过，已自动跳过。`);
+            // 重写 ID 附加稳定序号后缀，确保重复内容 ID 的唯一性
+            const uniqueId = `${originalId}_seq_${blockIndex}`;
+            parsed.id = uniqueId;
+
+            // 兼容性校验：检查 uniqueId 或原始 originalId 是否已执行过
+            const alreadyExecuted = currentConvExecutedIds.has(uniqueId) || currentConvExecutedIds.has(originalId);
+            if (alreadyExecuted) {
+              logToTerminal(`提示：指令 ID [${uniqueId}] 在当前对话中已执行过，已自动跳过。`);
               return;
             }
             pendingTasks.push(parsed);
