@@ -16,6 +16,26 @@ let currentConvExecutedIds = new Set(); // 当前对话已执行过的指令 ID 
 let activeTaskQueue = []; // 当前处于待执行状态的子任务队列
 let queueResultsCollector = []; // 已执行完的子任务结果汇总
 let isQueueModeActive = false; // 是否处于队列执行模式
+let queueFilesToPaste = []; // 待粘贴的文件队列
+
+// 将 Base64 解析还原为原生的 Blob 和 File 容器
+async function base64ToFile(base64Data, mimeType, filename) {
+  try {
+    const res = await fetch(`data:${mimeType};base64,${base64Data}`);
+    const blob = await res.blob();
+    return new File([blob], filename, { type: mimeType });
+  } catch (e) {
+    console.error("[GLAB] base64ToFile conversion error:", e);
+    // fallback using traditional atob if data URL fetch fails
+    const binary = atob(base64Data);
+    const array = [];
+    for (let i = 0; i < binary.length; i++) {
+      array.push(binary.charCodeAt(i));
+    }
+    const blob = new Blob([new Uint8Array(array)], { type: mimeType });
+    return new File([blob], filename, { type: mimeType });
+  }
+}
 
 // 安全读取存储 (防 context invalidated 崩溃)
 function safeGetStorage(keys, callback) {
@@ -642,18 +662,19 @@ function generateInitPrompt(workDir, skillsDir) {
     prompt += `   你应先 list_skills 了解有哪些可用技能，再决定是否加载和运行。\n\n`;
   }
   
-  prompt += `3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出。你可以选择以下两种方式之一：\n\n`;
+  prompt += `3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出。每个指令对象中可以包含可选的 \`autoSend\` 参数（布尔值，默认 \`true\`）。如果设为 \`false\`，指令执行完毕回填后**不会**自动提交，方便你等待用户手动输入或确认；如果设为 \`true\`，回填后会自动发送。你可以选择以下两种方式之一：\n\n`;
   prompt += `   **A. 单步执行指令**（单条 JSON 对象）：\n`;
-  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "<操作名>",\n     "params": { ... }\n   }\n   \`\`\`\n\n`;
+  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "<操作名>",\n     "params": { ... },\n     "autoSend": true\n   }\n   \`\`\`\n\n`;
   prompt += `   **B. 多步骤任务队列**（推荐！当任务需要多步才能完成时，例如先读目录再读文件，或同时修改/创建多个文件，你可以打包成 JSON 数组在单个代码块中发出，或者输出多个独立的 glab-call 代码块。它们会依次串行执行并统一汇总结果）：\n`;
-  prompt += `   \`\`\`glab-call\n   [\n     {\n       "id": "唯一ID1",\n       "action": "<操作名1>",\n       "params": { ... }\n     },\n     {\n       "id": "唯一ID2",\n       "action": "<操作名2>",\n       "params": { ... }\n     }\n   ]\n   \`\`\`\n\n`;
+  prompt += `   \`\`\`glab-call\n   [\n     {\n       "id": "唯一ID1",\n       "action": "<操作名1>",\n       "params": { ... }\n     },\n     {\n       "id": "唯一ID2",\n       "action": "<操作名2>",\n       "params": { ... },\n       "autoSend": false\n     }\n   ]\n   \`\`\`\n\n`;
   prompt += `**可用操作速查表**：\n`;
   prompt += `- \`list_dir\`：列目录。params: { "path": "..." }\n`;
   prompt += `- \`read_file\`：读文件. params: { "path": "..." }\n`;
   prompt += `- \`write_file\`：新建文件（若已存在则报错）。params: { "path": "...", "content": "..." }\n`;
   prompt += `- \`update_file\` (覆盖)：整体覆盖写入。params: { "path": "...", "mode": "overwrite", "content": "完整新内容" }\n`;
   prompt += `- \`update_file\` (补丁)：局部替换。params: { "path": "...", "mode": "patch", "patches": [{ "find": "原文", "replace": "新文" }] }\n`;
-  prompt += `- \`run_code\`：执行代码片段。params: { "code": "..." }\n`;
+  prompt += `- \`run_code\`：执行代码片段. params: { "code": "..." }\n`;
+  prompt += `- \`paste_file\`：自动读取本地文件并模拟粘贴上传至 Gemini 聊天输入框。params: { "path": "..." }\n`;
   if (skillsDir) {
     prompt += `- \`list_skills\` / \`load_skill\` / \`run_skill\`：Skills 相关操作。\n`;
   }
@@ -754,8 +775,8 @@ function connectSocket() {
   });
 }
 
-// 模拟回填并自动发送
-function replyToGemini(text) {
+// 模拟回填并自动发送，支持携带待粘贴的文件列表与是否自动发送标记
+function replyToGemini(text, filesToPaste = [], autoSend = true) {
   const inputEl = document.querySelector('div[contenteditable="true"][role="textbox"]');
   if (!inputEl) {
     logToTerminal("错误：未找到 Gemini 输入框，无法回填！");
@@ -763,14 +784,14 @@ function replyToGemini(text) {
     return;
   }
   
-  updatePanelState('replying', '回填并发送中');
+  updatePanelState('replying', autoSend ? '回填并发送中' : '回填完成，等待发送');
   inputEl.focus();
 
   // 清空输入框
   document.execCommand('selectAll', false, null);
   document.execCommand('delete', false, null);
   
-  // 将换行符转为 <br>，并对其余 HTML 特殊字符进行安全转义，以防被解析为恶意 DOM 节点
+  // 将换行符转为 <br>，并对其余 HTML 特特殊字符进行安全转义，以防被解析为恶意 DOM 节点
   const htmlContent = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -779,33 +800,127 @@ function replyToGemini(text) {
     .replace(/'/g, "&#039;")
     .replace(/\n/g, "<br>");
 
+  // 记录写入前的文本
+  const textBeforeInsert = inputEl.textContent;
+
   // 必须使用 insertHTML 才能完整保留换行符，且确保 React 前端状态同步
   document.execCommand('insertHTML', false, htmlContent);
   
-  inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+  // 兜底策略：如果通过 execCommand 写入失败（文本没有发生变化，且内容不为空），使用 innerHTML 直接强行写入
+  if (inputEl.textContent === textBeforeInsert && text.trim() !== '') {
+    logToTerminal("警告：execCommand 写入失效，触发 innerHTML 强行回填机制...");
+    inputEl.innerHTML = htmlContent;
+  }
 
-  setTimeout(() => {
-    const sendButton = document.querySelector('button[aria-label="发送消息"]') || 
-                       document.querySelector('button.send-button');
-    if (sendButton && !sendButton.disabled) {
-      sendButton.click();
+  inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+  inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // 如果有待粘贴的文件，逐个进行模拟粘贴
+  if (filesToPaste && filesToPaste.length > 0) {
+    logToTerminal(`准备在输入框中粘贴 ${filesToPaste.length} 个文件...`);
+    for (const file of filesToPaste) {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      const pasteEvent = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dataTransfer
+      });
+      inputEl.dispatchEvent(pasteEvent);
+      logToTerminal(`文件 [${file.name}] 已完成粘贴。`);
     }
-  }, 500);
+  }
+
+  if (autoSend) {
+    const sendDelay = (filesToPaste && filesToPaste.length > 0) ? 1000 : 500;
+    setTimeout(() => {
+      // 1. 尝试定位发送按钮（考虑 Angular/Material 结构，例如 .send-button button 或 button[aria-label="发送"]）
+      const container = document.querySelector('.send-button') || 
+                        document.querySelector('gem-icon-button[class*="send"]');
+      const innerButton = container ? container.querySelector('button') : null;
+      const sendButton = innerButton || 
+                         document.querySelector('button[aria-label="发送"]') ||
+                         document.querySelector('button[aria-label="发送消息"]') ||
+                         document.querySelector('button[aria-label="Send message"]') ||
+                         document.querySelector('button[aria-label="Send"]') ||
+                         document.querySelector('button[aria-label*="发送"]') ||
+                         document.querySelector('button[aria-label*="Send"]');
+
+      if (sendButton) {
+        // 2. 检查是否处于禁用状态 (检测 disabled 属性和 aria-disabled 状态)
+        const checkDisabled = () => {
+          if (sendButton.disabled || sendButton.hasAttribute('disabled')) return true;
+          if (sendButton.getAttribute('aria-disabled') === 'true') return true;
+          const parentContainer = sendButton.closest('gem-icon-button') || sendButton.closest('.send-button');
+          if (parentContainer) {
+            if (parentContainer.getAttribute('aria-disabled') === 'true') return true;
+            if (parentContainer.classList.contains('disabled')) return true;
+          }
+          return false;
+        };
+
+        // 3. 使用轮询重试机制，每次间隔 200ms，最高重试 10 次（共 2 秒），以确保 React/Angular 状态响应并启用按钮
+        let attempts = 0;
+        const maxAttempts = 10;
+        const interval = setInterval(() => {
+          attempts++;
+          const isDisabled = checkDisabled();
+          logToTerminal(`检查发送按钮状态 (第 ${attempts} 次): disabled = ${isDisabled}`);
+          if (!isDisabled) {
+            sendButton.click();
+            logToTerminal("已成功点击发送。");
+            clearInterval(interval);
+            
+            // 自动重置连续运行步骤计数器，防止阻碍下一轮自动发送
+            autoRunDepth = 0;
+            updateDepthCounter();
+          } else if (attempts >= maxAttempts) {
+            logToTerminal("错误：发送按钮在 2 秒内未能启用，自动发送已取消，请手动点击发送。");
+            clearInterval(interval);
+          }
+        }, 200);
+      } else {
+        logToTerminal("错误：未能在页面中找到任何匹配的发送按钮！");
+      }
+    }, sendDelay);
+  } else {
+    setTimeout(() => {
+      updatePanelState('idle', '已就绪');
+      logToTerminal("回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...");
+    }, 500);
+  }
 }
 
 // 处理 CLI 返回的数据
-function handleCLIResponse(response) {
-  const { id, status, data, error } = response;
-  logToTerminal(`收到执行结果 [${id}]: ${status}`);
+async function handleCLIResponse(response) {
+  const { id, action, status, data, error, autoSend } = response;
+  logToTerminal(`收到执行结果 [${id}]: ${status} (autoSend: ${autoSend})`);
 
   if (isQueueModeActive) {
+    // 如果是 paste_file 成功，我们将其解析并暂存在 queueFilesToPaste 中
+    if (status === "success" && action === "paste_file" && data) {
+      try {
+        const file = await base64ToFile(data.base64Data, data.mimeType, data.filename);
+        queueFilesToPaste.push(file);
+        logToTerminal(`文件 [${file.name}] 成功解码并加入待粘贴列表。`);
+        
+        // 缩减大体积 Base64 数据以防填充到页面输入框中
+        response.data = {
+          ...data,
+          base64Data: `[Base64 Data: ${data.base64Data.length} chars, automatically hidden in text prompt]`
+        };
+      } catch (e) {
+        logToTerminal(`文件解码失败: ${e.message}`);
+      }
+    }
+
     // 队列模式：收集结果，触发串行队列中的下一项
     queueResultsCollector.push(response);
     
     // 如果子任务执行失败，直接熔断（停止后续执行）并汇总回填结果
     if (status === "error") {
       logToTerminal(`[队列调度] 子任务 [${id}] 执行失败，触发队列熔断。`);
-      finishQueueExecution();
+      finishQueueExecution(autoSend);
     } else {
       executeNextQueueTask();
     }
@@ -813,12 +928,31 @@ function handleCLIResponse(response) {
     // 常规单步模式：直接反馈回填
     let feedbackText = `【GLAB 执行结果反馈】\n`;
     feedbackText += `指令ID: ${id}\n`;
+    const shouldAutoSend = autoSend !== false && autoSend !== "false";
     if (status === "success") {
-      feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
+      let displayData = data;
+      if (action === "paste_file" && data) {
+        displayData = {
+          ...data,
+          base64Data: `[Base64 Data: ${data.base64Data.length} chars, automatically hidden in text prompt]`
+        };
+      }
+      feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(displayData, null, 2)}\n\`\`\``;
+      if (action === "paste_file" && data) {
+        try {
+          const file = await base64ToFile(data.base64Data, data.mimeType, data.filename);
+          replyToGemini(feedbackText, [file], shouldAutoSend);
+        } catch (e) {
+          logToTerminal(`文件解码失败: ${e.message}`);
+          replyToGemini(feedbackText + `\n解码失败: ${e.message}`, [], shouldAutoSend);
+        }
+      } else {
+        replyToGemini(feedbackText, [], shouldAutoSend);
+      }
     } else {
       feedbackText += `执行状态: 失败\n原因: ${error}`;
+      replyToGemini(feedbackText, [], shouldAutoSend);
     }
-    replyToGemini(feedbackText);
   }
 }
 
@@ -827,7 +961,9 @@ function handleCLIResponse(response) {
 // ==========================================
 function executeNextQueueTask() {
   if (activeTaskQueue.length === 0) {
-    finishQueueExecution();
+    const lastResponse = queueResultsCollector[queueResultsCollector.length - 1];
+    const lastAutoSend = lastResponse ? lastResponse.autoSend : undefined;
+    finishQueueExecution(lastAutoSend);
     return;
   }
 
@@ -836,7 +972,7 @@ function executeNextQueueTask() {
   handleInstructionFlow(currentTask);
 }
 
-function finishQueueExecution() {
+function finishQueueExecution(autoSend) {
   logToTerminal("多流程任务队列执行结束，正在汇总结果并自动回填...");
   
   let feedbackText = `【GLAB 多流程任务执行结果汇总反馈】\n\n`;
@@ -862,12 +998,16 @@ function finishQueueExecution() {
 
   feedbackText += `【继续执行提示】请根据上述所有子任务的汇总执行结果，继续进行下一阶段的本地文件操作或完成后续任务。`;
 
-  // 重置队列缓存
+  // 保存待粘贴的文件列表并重置队列缓存
+  const filesToPaste = [...queueFilesToPaste];
+
   isQueueModeActive = false;
   activeTaskQueue = [];
   queueResultsCollector = [];
+  queueFilesToPaste = [];
 
-  replyToGemini(feedbackText);
+  const shouldAutoSend = autoSend !== false && autoSend !== "false";
+  replyToGemini(feedbackText, filesToPaste, shouldAutoSend);
 }
 
 // ==========================================
@@ -945,6 +1085,7 @@ function scanAndExecuteInstructions() {
         isQueueModeActive = true;
         queueResultsCollector = [];
         activeTaskQueue = pendingTasks;
+        queueFilesToPaste = [];
         
         logToTerminal(`启动多流程队列模式，共 [${activeTaskQueue.length}] 个任务待执行。`);
         
@@ -972,7 +1113,7 @@ function scanAndExecuteInstructions() {
 }
 
 function handleInstructionFlow(request) {
-  const readOnlyActions = ['list_dir', 'read_file', 'list_skills', 'load_skill'];
+  const readOnlyActions = ['list_dir', 'read_file', 'list_skills', 'load_skill', 'paste_file'];
 
   if (autoRunDepth >= 10) {
     updatePanelState('error', '步骤超限锁定');
@@ -1057,8 +1198,15 @@ function showConfirmUI(request) {
 
 // 监听手动发送：点击发送按钮（用 closest 兼容子元素点击）
 document.addEventListener('click', (e) => {
-  if (e.target.closest('button[aria-label="发送消息"]') ||
-      e.target.closest('button.send-button')) {
+  if (e.target.closest('button[aria-label="发送"]') ||
+      e.target.closest('button[aria-label="发送消息"]') ||
+      e.target.closest('button[aria-label="Send message"]') ||
+      e.target.closest('button[aria-label="Send"]') ||
+      e.target.closest('button[aria-label*="发送"]') ||
+      e.target.closest('button[aria-label*="Send"]') ||
+      e.target.closest('button.send-button') ||
+      e.target.closest('.send-button') ||
+      e.target.closest('gem-icon-button[class*="send"]')) {
     autoRunDepth = 0;
     updateDepthCounter();
   }

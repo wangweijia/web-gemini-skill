@@ -250,6 +250,21 @@ sequenceDiagram
   }
   ```
 
+#### **9. 粘贴本地文件 (`paste_file`)**
+* **用途**：读取工作区指定相对路径的文件，并将其通过模拟剪贴板粘贴事件（Clipboard Event）粘贴到 Gemini 的网页输入框中（通常用于发送图片、大日志、PDF等以触发 Gemini 的多模态理解与解析能力）。
+* **参数**：
+  * `path` (string, 必填): 本地文件相对路径。
+* **输入示例**：
+  ```glab-call
+  {
+    "id": "call_013",
+    "action": "paste_file",
+    "params": {
+      "path": "./screenshots/bug.png"
+    }
+  }
+  ```
+
 ---
 
 ## **3. 插件端 UI 与技术实现细节**
@@ -301,16 +316,29 @@ sequenceDiagram
    - 使用 `run_skill` 指令执行该 Skill 的入口脚本，并传入所需参数。
    你应先 list_skills 了解有哪些可用技能，再决定是否加载和运行。
 
-3. **指令格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 ```glab-call 代码块格式输出，不得出现在代码块之外：
+3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 ```glab-call 代码块格式输出。你可以选择以下两种方式之一：
+   
+   **A. 单步执行指令**（单条 JSON 对象）：
    ```glab-call
    {
      "id": "唯一ID",
-     "action": "list_dir | read_file | write_file | update_file | run_code | list_skills | load_skill | run_skill",
+     "action": "list_dir | read_file | write_file | update_file | run_code | list_skills | load_skill | run_skill | paste_file",
      "params": { ... }
    }
    ```
 
-4. **等待反馈**：每次输出 ```glab-call 指令后，停止继续输出，等待我将本地执行结果回传给你，再继续后续步骤。
+   **B. 多步骤任务队列**（JSON 数组）：
+   ```glab-call
+   [
+     {
+       "id": "唯一ID1",
+       "action": "list_dir | read_file | write_file | update_file | run_code | list_skills | load_skill | run_skill | paste_file",
+       "params": { ... }
+     }
+   ]
+   ```
+
+4. **等待反馈**：每次输出 ```glab-call 指令（或指令列表）后，停止继续输出，等待我将本地执行结果（若为多步骤，则是汇总结果）回传给你，再根据执行结论继续完成后续任务。
 
 已准备就绪，工作目录已锁定为：${workDir}${skillsDir ? `，Skills 目录为：${skillsDir}` : ''}
 ```

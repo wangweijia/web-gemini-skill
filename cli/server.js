@@ -52,6 +52,27 @@ function getSafeSkillPath(skillsDir, skillName) {
   return resolved;
 }
 
+const MIME_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.json': 'application/json',
+  '.md': 'text/markdown',
+  '.js': 'application/javascript',
+  '.html': 'text/html',
+  '.css': 'text/css'
+};
+
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_TYPES[ext] || 'application/octet-stream';
+}
+
 // ==========================================
 // 安全沙箱环境构建
 // ==========================================
@@ -164,10 +185,10 @@ wss.on('connection', (ws) => {
     console.log(`[GLAB CLI] 收到执行请求: [${action}] ID: ${id}`);
     try {
       const result = await executeAction(action, params);
-      ws.send(JSON.stringify({ id, status: "success", data: result }));
+      ws.send(JSON.stringify({ id, action, autoSend: request.autoSend, status: "success", data: result }));
     } catch (err) {
       console.error(`[GLAB CLI] 执行失败 [${action}] ID: ${id}: ${err.message}`);
-      ws.send(JSON.stringify({ id, status: "error", error: err.message }));
+      ws.send(JSON.stringify({ id, action, autoSend: request.autoSend, status: "error", error: err.message }));
     }
   });
 
@@ -347,6 +368,20 @@ async function executeAction(action, params) {
           reject(new Error(`无法启动 Skill 进程: ${err.message}`));
         });
       });
+    }
+
+    case 'paste_file': {
+      const targetPath = getSafePath(params.path);
+      if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
+        throw new Error('文件不存在或路径为目录');
+      }
+      const mimeType = getMimeType(targetPath);
+      const base64Data = fs.readFileSync(targetPath).toString('base64');
+      return {
+        mimeType,
+        base64Data,
+        filename: path.basename(targetPath)
+      };
     }
 
     default:
