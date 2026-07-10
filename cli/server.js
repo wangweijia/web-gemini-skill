@@ -18,14 +18,14 @@ process.argv.slice(2).forEach(arg => {
 
 const { exec } = require('child_process');
 
-// safeRoot 改为动态变量，握手时根据插件配置锁定路径
+// safeRoot 与 skillsDir 改为动态变量，握手时根据插件配置锁定路径
 let safeRoot = '';
-const skillsDir = args['skills-dir'] ? path.resolve(args['skills-dir']) : '';
+let skillsDir = '';
 const PORT = args['port'] ? parseInt(args['port'], 10) : 9003;
 
 console.log("\x1b[32m[GLAB CLI] 安全代理服务正在初始化...\x1b[0m");
 console.log(`[GLAB CLI] 工作根目录: 等待浏览器插件握手传入并锁定...`);
-console.log(`[GLAB CLI] Skills 目录: ${skillsDir || '未启用'}`);
+console.log(`[GLAB CLI] Skills 目录: 等待浏览器插件握手传入并锁定...`);
 
 // ==========================================
 // 路径安全校验逻辑
@@ -164,7 +164,13 @@ wss.on('connection', (ws) => {
     if (action === "shakehand") {
       if (params && params.workDir) {
         safeRoot = path.resolve(params.workDir);
-        console.log(`[GLAB CLI] 握手成功！工作根目录已锁定: ${safeRoot}`);
+        if (params.skillsDir) {
+          skillsDir = path.resolve(params.skillsDir);
+          console.log(`[GLAB CLI] 握手成功！工作根目录已锁定: ${safeRoot}，Skills 目录已锁定: ${skillsDir}`);
+        } else {
+          skillsDir = '';
+          console.log(`[GLAB CLI] 握手成功！工作根目录已锁定: ${safeRoot}，Skills 目录未配置`);
+        }
         ws.send(JSON.stringify({
           action: "shakehand_reply",
           status: "success",
