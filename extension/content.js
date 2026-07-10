@@ -69,20 +69,45 @@ function getConversationId() {
   return match ? match[1] : 'default_session';
 }
 
+let isStorageLoading = false;
+let storageCallbacksQueue = [];
+
 // 缓存与同步当前会话已执行 ID 列表
 function syncConvExecutedIds(callback) {
   const convId = getConversationId();
-  if (convId === currentConvId) {
+  
+  // 如果会话 ID 一致且不处于读取状态下，直接回调
+  if (convId === currentConvId && !isStorageLoading) {
     if (callback) callback();
     return;
   }
-  currentConvId = convId;
+  
+  // 会话切换，重置加载状态与队列
+  if (convId !== currentConvId) {
+    currentConvId = convId;
+    isStorageLoading = true;
+    storageCallbacksQueue = [];
+  }
+  
+  if (callback) {
+    storageCallbacksQueue.push(callback);
+  }
+  
+  // 如果当前已经在读取中，不再重复启动读取，只需加入回调队列等待即可
+  if (storageCallbacksQueue.length > 1) {
+    return;
+  }
+  
   const storageKey = `glab_history_${convId}`;
   safeGetStorage([storageKey], (res) => {
     const list = res[storageKey] || [];
     currentConvExecutedIds = new Set(list);
     console.log(`[GLAB] 已加载当前对话 [${convId}] 已执行指令黑名单:`, list);
-    if (callback) callback();
+    
+    isStorageLoading = false;
+    const queue = storageCallbacksQueue;
+    storageCallbacksQueue = [];
+    queue.forEach(cb => cb());
   });
 }
 
