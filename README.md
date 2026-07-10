@@ -106,6 +106,7 @@ AI 可以通过在回答中输出 `language-glab-call` 的 Markdown 代码块来
 | `write_file` | 在相对路径下新建或写覆盖文件 | `path` (string, 必填), `content` (string, 必填) |
 | `update_file` | 应用 Patch 补丁增量修改已有文件 | `path` (string, 必填), `mode`: "patch", `patches`: `[{find, replace}]` |
 | `run_code` | 在 CLI 端的 VM 沙箱中执行临时 JS 代码 | `code` (string, 必填) |
+| `run_command` | 在本地工作根目录下执行指定的 Shell 命令行指令 | `command` (string, 必填) |
 | `paste_file` | 将本地文件作为剪贴板内容粘贴入输入框 | `path` (string, 必填) |
 | `list_skills` | 列出 Skills 目录下已声明的所有技能脚本 | 无 |
 | `load_skill` | 加载指定技能脚本的入口内容与文档 | `name` (string, 必填) |
@@ -115,5 +116,5 @@ AI 可以通过在回答中输出 `language-glab-call` 的 Markdown 代码块来
 
 ## ⚖️ 安全机制
 
-1. **Auto-run 开关**：在关闭 Auto-run 模式时，任何写操作（`write_file`, `update_file`, `run_code`, `run_skill`）均会触发浏览器端抽屉的二次确认。插件会展示 Diff 变更内容，仅在用户手工点击 `[✔️ 批准]` 后，指令才会下发给 CLI 执行。
+1. **Auto-run 开关**：在关闭 Auto-run 模式时，任何写/变更操作（`write_file`, `update_file`, `run_code`, `run_command`, `run_skill`）均会触发浏览器端抽屉的二次确认。插件会展示 Diff 变更内容，仅在用户手工点击 `[✔️ 批准]` 后，指令才会下发给 CLI 执行。
 2. **防 AI 陷入死循环限制**：单轮自动化执行步骤深度上限设为 `10`，达到后自动切断自动执行以防资源消耗，由用户确认后手动接管。

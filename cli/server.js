@@ -370,6 +370,31 @@ async function executeAction(action, params) {
       });
     }
 
+    case 'run_command': {
+      if (!params || !params.command) {
+        throw new Error('参数 command 不能为空');
+      }
+      return new Promise((resolve, reject) => {
+        // 限制 30 秒执行超时
+        const timer = setTimeout(() => {
+          proc.kill();
+          reject(new Error('Shell 命令执行超时(30s)被强制终止。'));
+        }, 30000);
+
+        const proc = exec(params.command, {
+          cwd: safeRoot,
+          env: { ...process.env, GLAB_WORK_DIR: safeRoot }
+        }, (error, stdout, stderr) => {
+          clearTimeout(timer);
+          if (error) {
+            resolve({ stdout, stderr, exitCode: error.code || 1, error: error.message });
+          } else {
+            resolve({ stdout, stderr, exitCode: 0 });
+          }
+        });
+      });
+    }
+
     case 'paste_file': {
       const targetPath = getSafePath(params.path);
       if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {

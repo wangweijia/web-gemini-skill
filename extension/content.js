@@ -664,7 +664,7 @@ function generateInitPrompt(workDir, skillsDir) {
   
   prompt += `3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出。每个指令对象中可以包含可选的 \`autoSend\` 参数（布尔值，默认 \`true\`）。如果设为 \`false\`，指令执行完毕回填后**不会**自动提交，方便你等待用户手动输入或确认；如果设为 \`true\`，回填后会自动发送。你可以选择以下两种方式之一：\n\n`;
   prompt += `   **A. 单步执行指令**（单条 JSON 对象）：\n`;
-  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "<操作名>",\n     "params": { ... },\n     "autoSend": true\n   }\n   \`\`\`\n\n`;
+  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "list_dir | read_file | write_file | update_file | run_code | run_command | paste_file | list_skills | load_skill | run_skill",\n     "params": { ... },\n     "autoSend": true\n   }\n   \`\`\`\n\n`;
   prompt += `   **B. 多步骤任务队列**（推荐！当任务需要多步才能完成时，例如先读目录再读文件，或同时修改/创建多个文件，你可以打包成 JSON 数组在单个代码块中发出，或者输出多个独立的 glab-call 代码块。它们会依次串行执行并统一汇总结果）：\n`;
   prompt += `   \`\`\`glab-call\n   [\n     {\n       "id": "唯一ID1",\n       "action": "<操作名1>",\n       "params": { ... }\n     },\n     {\n       "id": "唯一ID2",\n       "action": "<操作名2>",\n       "params": { ... },\n       "autoSend": false\n     }\n   ]\n   \`\`\`\n\n`;
   prompt += `**可用操作速查表**：\n`;
@@ -674,6 +674,7 @@ function generateInitPrompt(workDir, skillsDir) {
   prompt += `- \`update_file\` (覆盖)：整体覆盖写入。params: { "path": "...", "mode": "overwrite", "content": "完整新内容" }\n`;
   prompt += `- \`update_file\` (补丁)：局部替换。params: { "path": "...", "mode": "patch", "patches": [{ "find": "原文", "replace": "新文" }] }\n`;
   prompt += `- \`run_code\`：执行代码片段. params: { "code": "..." }\n`;
+  prompt += `- \`run_command\`：执行本地 Shell 命令行指令（例如文件重命名、移动、新建等）。params: { "command": "..." }\n`;
   prompt += `- \`paste_file\`：自动读取本地文件并模拟粘贴上传至 Gemini 聊天输入框。params: { "path": "..." }\n`;
   if (skillsDir) {
     prompt += `- \`list_skills\` / \`load_skill\` / \`run_skill\`：Skills 相关操作。\n`;

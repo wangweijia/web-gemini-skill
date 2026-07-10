@@ -265,6 +265,21 @@ sequenceDiagram
   }
   ```
 
+#### **10. 执行本地 Shell 命令 (`run_command`)**
+* **用途**：在本地工作根目录下执行指定的 Shell 命令行指令（如文件重命名、移动、新建、删除等本地系统操作）。服务端会将命令的 stdout、stderr 及 exitCode 返回给插件。
+* **参数**：
+  * `command` (string, 必填): 待执行的完整 Shell 命令行指令。
+* **输入示例**：
+  ```glab-call
+  {
+    "id": "call_014",
+    "action": "run_command",
+    "params": {
+      "command": "mv old-name.js new-name.js"
+    }
+  }
+  ```
+
 ---
 
 ## **3. 插件端 UI 与技术实现细节**
@@ -322,7 +337,7 @@ sequenceDiagram
    ```glab-call
    {
      "id": "唯一ID",
-     "action": "list_dir | read_file | write_file | update_file | run_code | list_skills | load_skill | run_skill | paste_file",
+     "action": "list_dir | read_file | write_file | update_file | run_code | run_command | paste_file | list_skills | load_skill | run_skill",
      "params": { ... }
    }
    ```
@@ -332,7 +347,7 @@ sequenceDiagram
    [
      {
        "id": "唯一ID1",
-       "action": "list_dir | read_file | write_file | update_file | run_code | list_skills | load_skill | run_skill | paste_file",
+       "action": "list_dir | read_file | write_file | update_file | run_code | run_command | paste_file | list_skills | load_skill | run_skill",
        "params": { ... }
      }
    ]
