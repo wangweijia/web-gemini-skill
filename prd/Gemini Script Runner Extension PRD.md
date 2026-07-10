@@ -379,6 +379,20 @@ sequenceDiagram
    * 一旦 `autoRunDepth >= 10`，直接切断自动流程，悬浮球变更为 🔴 锁定红灯，停止回填，并在面板提示“已达到最大连续执行深度，请检查 AI 是否陷入死循环，点击按钮可手动接管继续”。
    * 当用户在输入框手动键入并发送新消息时，`autoRunDepth` 清零，重新开始计数。
 
+### **3.5 队列调度、结果回填与发送按钮事件模拟**
+1. **多步骤队列与文件缓冲**：
+   * 支持批量任务队列（即 JSON 数组的 `glab-call`）。当队列中包含 `paste_file` 指令时，插件会自动将本地 CLI 返回的 Base64 文件内容解析还原为原生的 `Blob` 和 `File` 容器，并推入临时的待粘贴文件缓存队列 `queueFilesToPaste` 中。
+   * 中途仅收集结果不回填，待队列内所有任务执行完毕后触发 `finishQueueExecution` 统一编译汇总文本。
+2. **多模态文件粘贴模拟**：
+   * 采用 `ClipboardEvent('paste')` 与 `DataTransfer` 模拟机制。将 File 包装后，分发原生事件塞入 Gemini 输入框。
+   * 为保持 Gemini 页面输入框的可读性与简洁性，在生成 `feedbackText` 时，插件会自动将返回数据中的大体积二进制 `base64Data` 串截断，替换为概括提示标签（例如 `[Base64 Data: ... chars, automatically hidden in text prompt]`），避免二进制码污染输入框。
+3. **指令控制的 `autoSend` 控制与无状态设计**：
+   * 指令支持可选参数 `"autoSend": true | false`（默认 `true`），直接发送给 CLI。CLI 会在执行完毕后，将该参数回传给插件。
+   * 若 `autoSend` 为 `false`，回填文件与日志后流程挂起，悬浮球恢复 `Idle` 态并展示“已就绪”并说明“回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...”，留给用户二次编辑与人工审阅的机会；若为 `true`，则直接执行自动发送逻辑。
+4. **回填稳定兜底与发送按钮轮询重试**：
+   * **输入文本回填兜底**：使用 `document.execCommand('insertHTML')` 写入并触发 `input` / `change` 事件；若因焦点丢失导致写入失效，自动启用 `innerHTML` 直接改写 DOM 作为兜底，保障写入率 100%。
+   * **发送按钮轮询点击**：由于单页应用（SPA）重绘及 React/Angular 内部渲染状态同步存在延迟，自动发送时使用 200ms 的轮询重试机制（最高 10 次，共 2 秒），以适应页面延迟；成功点击后自动重置连续运行步骤计数器 `autoRunDepth = 0`。
+
 ---
 
 ## **4. 本地 CLI 服务端设计**
