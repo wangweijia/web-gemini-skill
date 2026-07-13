@@ -18,14 +18,33 @@ process.argv.slice(2).forEach(arg => {
 
 const { exec } = require('child_process');
 
+const os = require('os');
+
 // safeRoot 与 skillsDir 改为动态变量，握手时根据插件配置锁定路径
 let safeRoot = '';
-let skillsDir = '';
+
+const defaultSkillsDir = args['skills-dir']
+  ? path.resolve(args['skills-dir'])
+  : path.join(os.homedir(), '.web-gemini-skill');
+
+// 初始化/创建 Skills 默认目录
+if (!fs.existsSync(defaultSkillsDir)) {
+  try {
+    fs.mkdirSync(defaultSkillsDir, { recursive: true });
+    console.log(`[GLAB CLI] 已初始化并自动创建 Skills 默认目录: ${defaultSkillsDir}`);
+  } catch (err) {
+    console.error(`[GLAB CLI] 创建 Skills 默认目录失败: ${err.message}`);
+  }
+} else {
+  console.log(`[GLAB CLI] 使用已存在的 Skills 目录: ${defaultSkillsDir}`);
+}
+
+let skillsDir = defaultSkillsDir;
 const PORT = args['port'] ? parseInt(args['port'], 10) : 9003;
 
 console.log("\x1b[32m[GLAB CLI] 安全代理服务正在初始化...\x1b[0m");
 console.log(`[GLAB CLI] 工作根目录: 等待浏览器插件握手传入并锁定...`);
-console.log(`[GLAB CLI] Skills 目录: 等待浏览器插件握手传入并锁定...`);
+console.log(`[GLAB CLI] Skills 目录: ${skillsDir}`);
 
 // ==========================================
 // 路径安全校验逻辑
@@ -162,28 +181,27 @@ wss.on('connection', (ws) => {
 
     // 握手：插件连接后，CLI 根据插件传入的工作目录进行锁定
     if (action === "shakehand") {
-      if (params && params.workDir) {
-        safeRoot = path.resolve(params.workDir);
-        if (params.skillsDir) {
-          skillsDir = path.resolve(params.skillsDir);
-          console.log(`[GLAB CLI] 握手成功！工作根目录已锁定: ${safeRoot}，Skills 目录已锁定: ${skillsDir}`);
-        } else {
-          skillsDir = '';
-          console.log(`[GLAB CLI] 握手成功！工作根目录已锁定: ${safeRoot}，Skills 目录未配置`);
-        }
-        ws.send(JSON.stringify({
-          action: "shakehand_reply",
-          status: "success",
-          data: { workDir: safeRoot, skillsDir }
-        }));
+      const clientWorkDir = params && params.workDir ? params.workDir.trim() : '';
+      const clientSkillsDir = params && params.skillsDir ? params.skillsDir.trim() : '';
+
+      if (clientWorkDir) {
+        safeRoot = path.resolve(clientWorkDir);
       } else {
-        console.warn(`[GLAB CLI] 握手失败！未传入工作根目录。`);
-        ws.send(JSON.stringify({
-          action: "shakehand_reply",
-          status: "error",
-          error: "未传入工作根目录"
-        }));
+        safeRoot = '';
       }
+
+      if (clientSkillsDir) {
+        skillsDir = path.resolve(clientSkillsDir);
+      } else {
+        skillsDir = defaultSkillsDir;
+      }
+
+      console.log(`[GLAB CLI] 握手处理：工作根目录锁定为: ${safeRoot || '未指定'}，Skills 目录锁定为: ${skillsDir}`);
+      ws.send(JSON.stringify({
+        action: "shakehand_reply",
+        status: "success",
+        data: { workDir: safeRoot, skillsDir }
+      }));
       return;
     }
 

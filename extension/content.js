@@ -719,57 +719,60 @@ function generateInitPrompt(workDir, skillsDir) {
 // 通信模块：WebSocket 长连接
 // ==========================================
 function connectSocket() {
-  safeGetStorage(['workDir'], (res) => {
-    if (!res.workDir) {
-      logToTerminal("配置挂起：尚未设置本地工作根目录，已静默断开代理连接。");
-      updatePanelState('error', '未配置目录');
-      return;
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
+  const url = `ws://localhost:${wsPort}`;
+  socket = new WebSocket(url);
+
+  socket.onopen = () => {
+    const statusVal = document.getElementById('glab-cli-status');
+    if (statusVal) {
+      statusVal.innerText = '已连接';
+      statusVal.className = 'status-val online';
     }
+    updatePanelState('idle', '空闲中');
+    logToTerminal("连接本地代理服务成功。");
 
-    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+    // 握手校验
+    safeGetStorage(['workDir', 'skillsDir'], (res) => {
+      socket.send(JSON.stringify({
+        action: "shakehand",
+        params: { workDir: res.workDir || '', skillsDir: res.skillsDir || '' }
+      }));
+    });
+  };
 
-    const url = `ws://localhost:${wsPort}`;
-    socket = new WebSocket(url);
-
-    socket.onopen = () => {
-      const statusVal = document.getElementById('glab-cli-status');
-      if (statusVal) {
-        statusVal.innerText = '已连接';
-        statusVal.className = 'status-val online';
-      }
-      updatePanelState('idle', '空闲中');
-      logToTerminal("连接本地代理服务成功。");
-
-      // 握手校验
-      safeGetStorage(['workDir', 'skillsDir'], (res) => {
-        socket.send(JSON.stringify({
-          action: "shakehand",
-          params: { workDir: res.workDir || '', skillsDir: res.skillsDir || '' }
-        }));
-      });
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const response = JSON.parse(event.data);
-        
-        // 处理系统选择目录回调
-        if (response.id && response.id.startsWith('select_dir_')) {
-          if (response.status === 'success' && response.data.selectedPath) {
-            const pathInput = document.getElementById('glab-input-workdir');
-            if (pathInput) {
-              pathInput.value = response.data.selectedPath;
-              logToTerminal(`已选择工作根目录: ${response.data.selectedPath}`);
-            }
-          } else {
-            logToTerminal(`选择目录失败或已取消。`);
+  socket.onmessage = (event) => {
+    try {
+      const response = JSON.parse(event.data);
+      
+      // 处理系统选择目录回调
+      if (response.id && response.id.startsWith('select_dir_')) {
+        if (response.status === 'success' && response.data.selectedPath) {
+          const pathInput = document.getElementById('glab-input-workdir');
+          if (pathInput) {
+            pathInput.value = response.data.selectedPath;
+            logToTerminal(`已选择工作根目录: ${response.data.selectedPath}`);
           }
-          return;
+        } else {
+          logToTerminal(`选择目录失败或已取消。`);
         }
+        return;
+      }
 
-        if (response.action === "shakehand_reply") {
-          if (response.status === "success") {
-            currentCLIRootDir = response.data.workDir;
+      if (response.action === "shakehand_reply") {
+        if (response.status === "success") {
+          currentCLIRootDir = response.data.workDir || '';
+          
+          // 同步从 CLI 获取到的 skillsDir 到 UI 面板和本地存储中
+          const cliSkillsDir = response.data.skillsDir || '';
+          const skillsDirInput = document.getElementById('glab-input-skillsdir');
+          if (skillsDirInput && cliSkillsDir) {
+            skillsDirInput.value = cliSkillsDir;
+            safeSetStorage({ skillsDir: cliSkillsDir });
+          }
+
+          if (currentCLIRootDir) {
             document.getElementById('glab-init-prompt-btn').disabled = false;
             logToTerminal(`双端安全握手成功。工作根目录已锁定: ${currentCLIRootDir}`);
             
@@ -778,33 +781,37 @@ function connectSocket() {
             observer.observe(document.body, { childList: true, subtree: true });
             logToTerminal("网页消息监听（Observer）已成功激活工作。");
           } else {
-            logToTerminal(`双端安全握手失败：${response.error}`);
+            document.getElementById('glab-init-prompt-btn').disabled = true;
+            logToTerminal("连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。");
+            observer.disconnect();
           }
-          return;
+        } else {
+          logToTerminal(`双端安全握手失败：${response.error}`);
         }
-        handleCLIResponse(response);
-      } catch (e) {
-        console.error("[GLAB] 解析本地消息失败:", e);
+        return;
       }
-    };
+      handleCLIResponse(response);
+    } catch (e) {
+      console.error("[GLAB] 解析本地消息失败:", e);
+    }
+  };
 
-    socket.onclose = () => {
-      const statusVal = document.getElementById('glab-cli-status');
-      if (statusVal) {
-        statusVal.innerText = '未连接';
-        statusVal.className = 'status-val offline';
-      }
-      document.getElementById('glab-init-prompt-btn').disabled = true;
-      updatePanelState('error', '连接断开');
-      logToTerminal("与本地代理连接断开，5秒后自动重连...");
-      
-      // 【核心安全保护】连接断开或未配置时，立刻注销监听器，停止执行任何动作
-      observer.disconnect();
-      currentCLIRootDir = '';
-      
-      setTimeout(connectSocket, 5000);
-    };
-  });
+  socket.onclose = () => {
+    const statusVal = document.getElementById('glab-cli-status');
+    if (statusVal) {
+      statusVal.innerText = '未连接';
+      statusVal.className = 'status-val offline';
+    }
+    document.getElementById('glab-init-prompt-btn').disabled = true;
+    updatePanelState('error', '连接断开');
+    logToTerminal("与本地代理连接断开，5秒后自动重连...");
+    
+    // 【核心安全保护】连接断开或未配置时，立刻注销监听器，停止执行任何动作
+    observer.disconnect();
+    currentCLIRootDir = '';
+    
+    setTimeout(connectSocket, 5000);
+  };
 }
 
 // 模拟回填并自动发送，支持携带待粘贴的文件列表与是否自动发送标记
