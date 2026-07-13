@@ -898,23 +898,28 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
           return false;
         };
 
-        // 3. 使用轮询重试机制，每次间隔 200ms，最高重试 10 次（共 2 秒），以确保 React/Angular 状态响应并启用按钮
+        // 3. 使用轮询重试机制，每次间隔 200ms，最高重试 150 次（共 30 秒），以确保 React/Angular 状态响应并启用按钮
         let attempts = 0;
-        const maxAttempts = 10;
+        const maxAttempts = 150;
         const interval = setInterval(() => {
           attempts++;
           const isDisabled = checkDisabled();
-          logToTerminal(`检查发送按钮状态 (第 ${attempts} 次): disabled = ${isDisabled}`);
+          
+          // 每隔 2 秒 (10次尝试) 或首次尝试时打印一次等待日志，避免频繁刷屏
+          if (attempts % 10 === 0 || attempts === 1) {
+            logToTerminal(`等待发送按钮启用中 (已等待 ${((attempts * 200) / 1000).toFixed(1)} 秒)...`);
+          }
+
           if (!isDisabled) {
             sendButton.click();
-            logToTerminal("已成功点击发送。");
+            logToTerminal("上传完成，已成功点击发送。");
             clearInterval(interval);
             
             // 自动重置连续运行步骤计数器，防止阻碍下一轮自动发送
             autoRunDepth = 0;
             updateDepthCounter();
           } else if (attempts >= maxAttempts) {
-            logToTerminal("错误：发送按钮在 2 秒内未能启用，自动发送已取消，请手动点击发送。");
+            logToTerminal("错误：发送按钮在 30 秒内未能启用，自动发送已取消，请手动点击发送。");
             clearInterval(interval);
           }
         }, 200);
