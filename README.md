@@ -1,6 +1,7 @@
-# Gemini Local Agent Bridge (GLAB) 🚀
+# Gemini & ChatGPT Local Agent Bridge (GLAB) 🚀
 
-Gemini Local Agent Bridge (GLAB) 是一个能够无缝桥接 **Gemini 网页端对话框** 与 **本地操作系统环境** 的浏览器扩展与本地代理服务系统。它通过高度集成的注入式侧边抽屉面板和安全本地 WebSocket 代理，允许 Gemini 直接安全地读取/写入你的项目代码、执行本地脚本 (Skills)、甚至通过模拟剪贴板粘贴多模态文件。
+Gemini & ChatGPT Local Agent Bridge (GLAB) 是一个能够无缝桥接 **Gemini / ChatGPT 网页端对话框** 与 **本地操作系统环境** 的浏览器扩展与本地代理服务系统。它通过高度集成的注入式侧边抽屉面板和安全本地 WebSocket 代理，允许 Gemini / ChatGPT 直接安全地读取/写入你的项目代码、执行本地脚本 (Skills)、甚至通过模拟剪贴板粘贴多模态文件。
+
 
 ---
 

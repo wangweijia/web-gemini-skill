@@ -8,13 +8,13 @@ let isGenerating = false;
 let generateTimer = null;
 let autoRunDepth = 0;
 let isAutoRunEnabled = true;
-let currentCLIRootDir = ''; // 暂存由本地 CLI 握手发送过来的根工作目录
-let currentConvId = ''; // 当前对话的唯一标识
+let currentCLIRootDir = ""; // 暂存由本地 CLI 握手发送过来的根工作目录
+let currentConvId = ""; // 当前对话的唯一标识
 let currentConvExecutedIds = new Set(); // 当前对话已执行过的指令 ID 强缓存 Set
 
 // 分片写入状态跟踪相关变量
 const approvedChunkPaths = new Set(); // 缓存已由用户手动确认的分片写入路径
-const activeChunkWrites = new Map();  // 暂存执行中的分片指令 ID 到文件路径的映射
+const activeChunkWrites = new Map(); // 暂存执行中的分片指令 ID 到文件路径的映射
 
 // 多流程任务队列控制变量
 let activeTaskQueue = []; // 当前处于待执行状态的子任务队列
@@ -43,7 +43,7 @@ async function base64ToFile(base64Data, mimeType, filename) {
 
 // 安全读取存储 (防 context invalidated 崩溃)
 function safeGetStorage(keys, callback) {
-  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id) {
     try {
       chrome.storage.local.get(keys, callback);
       return;
@@ -56,7 +56,7 @@ function safeGetStorage(keys, callback) {
 
 // 安全写入存储 (防 context invalidated 崩溃)
 function safeSetStorage(data, callback) {
-  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id) {
     try {
       chrome.storage.local.set(data, callback);
       return;
@@ -69,9 +69,18 @@ function safeSetStorage(data, callback) {
 
 // 获取当前对话唯一 ID
 function getConversationId() {
-  const match = window.location.pathname.match(/\/app\/([a-f0-9]+)/);
-  return match ? match[1] : 'default_session';
+  const path = window.location.pathname;
+  // Gemini: /app/123456789
+  const geminiMatch = path.match(/\/app\/([a-f0-9]+)/);
+  if (geminiMatch) return geminiMatch[1];
+
+  // ChatGPT: /c/6a607179-15a8-83ec-8295-09ebd30783e9
+  const gptMatch = path.match(/\/c\/([a-f0-9-]+)/);
+  if (gptMatch) return gptMatch[1];
+
+  return "default_session";
 }
+
 
 let isStorageLoading = false;
 let storageCallbacksQueue = [];
@@ -79,39 +88,39 @@ let storageCallbacksQueue = [];
 // 缓存与同步当前会话已执行 ID 列表
 function syncConvExecutedIds(callback) {
   const convId = getConversationId();
-  
+
   // 如果会话 ID 一致且不处于读取状态下，直接回调
   if (convId === currentConvId && !isStorageLoading) {
     if (callback) callback();
     return;
   }
-  
+
   // 会话切换，重置加载状态与队列
   if (convId !== currentConvId) {
     currentConvId = convId;
     isStorageLoading = true;
     storageCallbacksQueue = [];
   }
-  
+
   if (callback) {
     storageCallbacksQueue.push(callback);
   }
-  
+
   // 如果当前已经在读取中，不再重复启动读取，只需加入回调队列等待即可
   if (storageCallbacksQueue.length > 1) {
     return;
   }
-  
+
   const storageKey = `glab_history_${convId}`;
   safeGetStorage([storageKey], (res) => {
     const list = res[storageKey] || [];
     currentConvExecutedIds = new Set(list);
     console.log(`[GLAB] 已加载当前对话 [${convId}] 已执行指令黑名单:`, list);
-    
+
     isStorageLoading = false;
     const queue = storageCallbacksQueue;
     storageCallbacksQueue = [];
-    queue.forEach(cb => cb());
+    queue.forEach((cb) => cb());
   });
 }
 
@@ -119,21 +128,22 @@ function syncConvExecutedIds(callback) {
 // UI 模块：注入 Glassmorphism 悬浮面板
 // ==========================================
 function injectGLABPanel() {
-  if (document.getElementById('glab-panel-root')) return;
+  if (document.getElementById("glab-panel-root")) return;
 
-  const root = document.createElement('div');
-  root.id = 'glab-panel-root';
+  const root = document.createElement("div");
+  root.id = "glab-panel-root";
 
   // 悬浮球
-  const floatBall = document.createElement('div');
-  floatBall.id = 'glab-float-ball';
-  floatBall.className = 'idle';
-  floatBall.title = 'GLAB Agent: 空闲中';
-  floatBall.innerHTML = '<span class="ball-icon">🤖</span><span class="status-indicator"></span>';
+  const floatBall = document.createElement("div");
+  floatBall.id = "glab-float-ball";
+  floatBall.className = "idle";
+  floatBall.title = "GLAB Agent: 空闲中";
+  floatBall.innerHTML =
+    '<span class="ball-icon">🤖</span><span class="status-indicator"></span>';
 
   // 抽屉面板
-  const drawer = document.createElement('div');
-  drawer.id = 'glab-drawer';
+  const drawer = document.createElement("div");
+  drawer.id = "glab-drawer";
   drawer.innerHTML = `
     <div class="glab-header">
       <div class="glab-title-group">
@@ -212,7 +222,7 @@ function injectGLABPanel() {
   document.body.appendChild(root);
 
   // 注入精细的 Glassmorphism 样式
-  const style = document.createElement('style');
+  const style = document.createElement("style");
   style.textContent = `
     #glab-panel-root {
       position: fixed;
@@ -576,17 +586,17 @@ function injectGLABPanel() {
   document.head.appendChild(style);
 
   // 初始化填入本地存储路径与配置
-  safeGetStorage(['workDir', 'skillsDir', 'wsPort'], (res) => {
+  safeGetStorage(["workDir", "skillsDir", "wsPort"], (res) => {
     if (res.workDir) {
-      document.getElementById('glab-input-workdir').value = res.workDir;
-      document.getElementById('glab-init-prompt-btn').disabled = false;
+      document.getElementById("glab-input-workdir").value = res.workDir;
+      document.getElementById("glab-init-prompt-btn").disabled = false;
     }
     if (res.skillsDir) {
-      document.getElementById('glab-input-skillsdir').value = res.skillsDir;
+      document.getElementById("glab-input-skillsdir").value = res.skillsDir;
     }
     wsPort = res.wsPort || 9003;
-    document.getElementById('glab-input-wsport').value = wsPort;
-    
+    document.getElementById("glab-input-wsport").value = wsPort;
+
     // 从本地存储读取真实配置端口后，再发起首次 WebSocket 连接
     connectSocket();
   });
@@ -594,75 +604,91 @@ function injectGLABPanel() {
   // ==========================================
   // 事件绑定
   // ==========================================
-  floatBall.addEventListener('click', () => {
-    drawer.classList.toggle('open');
+  floatBall.addEventListener("click", () => {
+    drawer.classList.toggle("open");
   });
 
-  document.getElementById('glab-close-drawer').addEventListener('click', () => {
-    drawer.classList.remove('open');
+  document.getElementById("glab-close-drawer").addEventListener("click", () => {
+    drawer.classList.remove("open");
   });
 
-  document.getElementById('glab-autorun-toggle').addEventListener('change', (e) => {
-    isAutoRunEnabled = e.target.checked;
-    logToTerminal(`Auto-run 模式已${isAutoRunEnabled ? '开启' : '关闭'}`);
-  });
+  document
+    .getElementById("glab-autorun-toggle")
+    .addEventListener("change", (e) => {
+      isAutoRunEnabled = e.target.checked;
+      logToTerminal(`Auto-run 模式已${isAutoRunEnabled ? "开启" : "关闭"}`);
+    });
 
   // 通过 CLI 唤起原生文件夹选择框
-  document.getElementById('glab-select-dir-btn').addEventListener('click', () => {
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      alert("错误：请先保证 WebSocket 服务已成功连接！");
-      return;
-    }
-    logToTerminal("正在通过 CLI 唤起本地系统文件夹选择器...");
-    const selectId = `select_dir_${Date.now()}`;
-    socket.send(JSON.stringify({
-      id: selectId,
-      action: "select_directory"
-    }));
-  });
-
-  document.getElementById('glab-save-config-btn').addEventListener('click', () => {
-    const workDir = document.getElementById('glab-input-workdir').value.trim();
-    const skillsDir = document.getElementById('glab-input-skillsdir').value.trim();
-    const wsPortInput = document.getElementById('glab-input-wsport').value.trim();
-    const port = wsPortInput ? parseInt(wsPortInput, 10) : 9003;
-
-    if (!workDir) {
-      alert("错误：工作根目录不能为空！");
-      return;
-    }
-    if (isNaN(port) || port <= 0 || port > 65535) {
-      alert("错误：非法的端口号！");
-      return;
-    }
-
-    wsPort = port;
-
-    safeSetStorage({ workDir, skillsDir, wsPort }, () => {
-      logToTerminal(`配置已保存！工作目录: ${workDir}, 端口: ${wsPort}`);
-      document.getElementById('glab-init-prompt-btn').disabled = false;
-      
-      // 重新建立连接，以进行握手检查
-      if (socket) socket.close();
-      connectSocket();
-    });
-  });
-
-  document.getElementById('glab-init-prompt-btn').addEventListener('click', () => {
-    safeGetStorage(['workDir', 'skillsDir'], (res) => {
-      if (!res.workDir) {
-        alert("错误：请先设置工作目录！");
+  document
+    .getElementById("glab-select-dir-btn")
+    .addEventListener("click", () => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert("错误：请先保证 WebSocket 服务已成功连接！");
         return;
       }
-      const prompt = generateInitPrompt(res.workDir, res.skillsDir);
-      replyToGemini(prompt);
-      drawer.classList.remove('open');
+      logToTerminal("正在通过 CLI 唤起本地系统文件夹选择器...");
+      const selectId = `select_dir_${Date.now()}`;
+      socket.send(
+        JSON.stringify({
+          id: selectId,
+          action: "select_directory",
+        }),
+      );
     });
-  });
+
+  document
+    .getElementById("glab-save-config-btn")
+    .addEventListener("click", () => {
+      const workDir = document
+        .getElementById("glab-input-workdir")
+        .value.trim();
+      const skillsDir = document
+        .getElementById("glab-input-skillsdir")
+        .value.trim();
+      const wsPortInput = document
+        .getElementById("glab-input-wsport")
+        .value.trim();
+      const port = wsPortInput ? parseInt(wsPortInput, 10) : 9003;
+
+      if (!workDir) {
+        alert("错误：工作根目录不能为空！");
+        return;
+      }
+      if (isNaN(port) || port <= 0 || port > 65535) {
+        alert("错误：非法的端口号！");
+        return;
+      }
+
+      wsPort = port;
+
+      safeSetStorage({ workDir, skillsDir, wsPort }, () => {
+        logToTerminal(`配置已保存！工作目录: ${workDir}, 端口: ${wsPort}`);
+        document.getElementById("glab-init-prompt-btn").disabled = false;
+
+        // 重新建立连接，以进行握手检查
+        if (socket) socket.close();
+        connectSocket();
+      });
+    });
+
+  document
+    .getElementById("glab-init-prompt-btn")
+    .addEventListener("click", () => {
+      safeGetStorage(["workDir", "skillsDir"], (res) => {
+        if (!res.workDir) {
+          alert("错误：请先设置工作目录！");
+          return;
+        }
+        const prompt = generateInitPrompt(res.workDir, res.skillsDir);
+        replyToGemini(prompt);
+        drawer.classList.remove("open");
+      });
+    });
 }
 
 function updatePanelState(stateClass, label) {
-  const ball = document.getElementById('glab-float-ball');
+  const ball = document.getElementById("glab-float-ball");
   if (ball) {
     ball.className = stateClass;
     ball.title = `GLAB Agent: ${label}`;
@@ -670,7 +696,7 @@ function updatePanelState(stateClass, label) {
 }
 
 function logToTerminal(text) {
-  const term = document.getElementById('glab-terminal-log');
+  const term = document.getElementById("glab-terminal-log");
   if (term) {
     const timeStr = new Date().toLocaleTimeString();
     term.textContent += `\n[${timeStr}] ${text}`;
@@ -682,7 +708,7 @@ function logToTerminal(text) {
 function generateInitPrompt(workDir, skillsDir) {
   let prompt = `你是我的本地文件操作 Agent。从现在起，请严格遵守以下规则：\n\n`;
   prompt += `1. **工作根目录**：你只能操作以下目录及其子目录中的文件：\n   \`${workDir}\`\n   严禁生成任何超出该目录范围的路径（如 ../、/etc/ 等）。\n\n`;
-  
+
   if (skillsDir) {
     prompt += `2. **Skills 能力**：\n   我本地有一个 Skills 目录，存放了可以复用的技能脚本：\n   \`${skillsDir}\`\n   当我的任务可能需要某个技能时，你可以：\n`;
     prompt += `   - 使用 \`list_skills\` 指令列出该目录下所有可用 Skill 及其功能摘要；\n`;
@@ -690,7 +716,7 @@ function generateInitPrompt(workDir, skillsDir) {
     prompt += `   - 使用 \`run_skill\` 指令执行该 Skill 的入口脚本，并传入所需参数。\n`;
     prompt += `   你应先 list_skills 了解有哪些可用技能，再决定是否加载和运行。\n\n`;
   }
-  
+
   prompt += `3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出。每个指令对象中可以包含可选的 \`autoSend\` 参数（布尔值，默认 \`true\`）。如果设为 \`false\`，指令执行完毕回填后**不会**自动提交，方便你等待用户手动输入或确认；如果设为 \`true\`，回填后会自动发送。你可以选择以下两种方式之一：\n\n`;
   prompt += `   **A. 单步执行指令**（单条 JSON 对象）：\n`;
   prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "list_dir | read_file | write_file | write_file_chunk | update_file | run_code | run_command | paste_file | list_skills | load_skill | run_skill",\n     "params": { ... },\n     "autoSend": true\n   }\n   \`\`\`\n\n`;
@@ -705,13 +731,13 @@ function generateInitPrompt(workDir, skillsDir) {
   prompt += `- \`update_file\` (补丁)：局部替换。params: { "path": "...", "mode": "patch", "patches": [{ "find": "原文", "replace": "新文" }] }\n`;
   prompt += `- \`run_code\`：执行代码片段. params: { "code": "..." }\n`;
   prompt += `- \`run_command\`：执行本地 Shell 命令行指令（例如文件重命名、移动、新建等）。params: { "command": "..." }\n`;
-  prompt += `- \`paste_file\`：自动读取本地文件并模拟粘贴上传至 Gemini 聊天输入框。params: { "path": "..." }\n`;
+  prompt += `- \`paste_file\`：自动读取本地文件并模拟粘贴上传至 AI 聊天输入框。params: { "path": "..." }\n`;
   if (skillsDir) {
     prompt += `- \`list_skills\` / \`load_skill\` / \`run_skill\`：Skills 相关操作。\n`;
   }
   prompt += `\n4. **长文本写入策略**：当你需要新建或覆盖写入的文件内容大于 4KB 或 80 行时，**请务必不要**直接使用 \`write_file\` 或 \`update_file (overwrite)\` 一次性输出，因为这容易在前端触发 Markdown 渲染错误（如渲染成 Canvas）或因超出最大输出 token 而被中途截断。你必须主动选择 \`write_file_chunk\` 将内容按顺序拆分为数个分片进行分批次写入。每个分片内容应控制在 4KB / 80 行以内。\n\n`;
   prompt += `5. **等待反馈**：每次输出 \`\`\`glab-call 指令（或指令列表）后，停止继续输出，等待我将本地执行结果（若为多步骤，则是汇总结果）回传给你，再根据执行结论继续完成后续任务。\n\n`;
-  prompt += `已准备就绪，工作目录已锁定为：${workDir}${skillsDir ? `，Skills 目录为：${skillsDir}` : ''}`;
+  prompt += `已准备就绪，工作目录已锁定为：${workDir}${skillsDir ? `，Skills 目录为：${skillsDir}` : ""}`;
   return prompt;
 }
 
@@ -719,37 +745,47 @@ function generateInitPrompt(workDir, skillsDir) {
 // 通信模块：WebSocket 长连接
 // ==========================================
 function connectSocket() {
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+  if (
+    socket &&
+    (socket.readyState === WebSocket.OPEN ||
+      socket.readyState === WebSocket.CONNECTING)
+  )
+    return;
 
   const url = `ws://localhost:${wsPort}`;
   socket = new WebSocket(url);
 
   socket.onopen = () => {
-    const statusVal = document.getElementById('glab-cli-status');
+    const statusVal = document.getElementById("glab-cli-status");
     if (statusVal) {
-      statusVal.innerText = '已连接';
-      statusVal.className = 'status-val online';
+      statusVal.innerText = "已连接";
+      statusVal.className = "status-val online";
     }
-    updatePanelState('idle', '空闲中');
+    updatePanelState("idle", "空闲中");
     logToTerminal("连接本地代理服务成功。");
 
     // 握手校验
-    safeGetStorage(['workDir', 'skillsDir'], (res) => {
-      socket.send(JSON.stringify({
-        action: "shakehand",
-        params: { workDir: res.workDir || '', skillsDir: res.skillsDir || '' }
-      }));
+    safeGetStorage(["workDir", "skillsDir"], (res) => {
+      socket.send(
+        JSON.stringify({
+          action: "shakehand",
+          params: {
+            workDir: res.workDir || "",
+            skillsDir: res.skillsDir || "",
+          },
+        }),
+      );
     });
   };
 
   socket.onmessage = (event) => {
     try {
       const response = JSON.parse(event.data);
-      
+
       // 处理系统选择目录回调
-      if (response.id && response.id.startsWith('select_dir_')) {
-        if (response.status === 'success' && response.data.selectedPath) {
-          const pathInput = document.getElementById('glab-input-workdir');
+      if (response.id && response.id.startsWith("select_dir_")) {
+        if (response.status === "success" && response.data.selectedPath) {
+          const pathInput = document.getElementById("glab-input-workdir");
           if (pathInput) {
             pathInput.value = response.data.selectedPath;
             logToTerminal(`已选择工作根目录: ${response.data.selectedPath}`);
@@ -762,27 +798,33 @@ function connectSocket() {
 
       if (response.action === "shakehand_reply") {
         if (response.status === "success") {
-          currentCLIRootDir = response.data.workDir || '';
-          
+          currentCLIRootDir = response.data.workDir || "";
+
           // 同步从 CLI 获取到的 skillsDir 到 UI 面板和本地存储中
-          const cliSkillsDir = response.data.skillsDir || '';
-          const skillsDirInput = document.getElementById('glab-input-skillsdir');
+          const cliSkillsDir = response.data.skillsDir || "";
+          const skillsDirInput = document.getElementById(
+            "glab-input-skillsdir",
+          );
           if (skillsDirInput && cliSkillsDir) {
             skillsDirInput.value = cliSkillsDir;
             safeSetStorage({ skillsDir: cliSkillsDir });
           }
 
           if (currentCLIRootDir) {
-            document.getElementById('glab-init-prompt-btn').disabled = false;
-            logToTerminal(`双端安全握手成功。工作根目录已锁定: ${currentCLIRootDir}`);
-            
+            document.getElementById("glab-init-prompt-btn").disabled = false;
+            logToTerminal(
+              `双端安全握手成功。工作根目录已锁定: ${currentCLIRootDir}`,
+            );
+
             // 【核心安全保护】只有握手锁定成功后，才挂载 Observer 开始监听页面消息
             observer.disconnect(); // 防止重复观察
             observer.observe(document.body, { childList: true, subtree: true });
             logToTerminal("网页消息监听（Observer）已成功激活工作。");
           } else {
-            document.getElementById('glab-init-prompt-btn').disabled = true;
-            logToTerminal("连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。");
+            document.getElementById("glab-init-prompt-btn").disabled = true;
+            logToTerminal(
+              "连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。",
+            );
             observer.disconnect();
           }
         } else {
@@ -797,40 +839,100 @@ function connectSocket() {
   };
 
   socket.onclose = () => {
-    const statusVal = document.getElementById('glab-cli-status');
+    const statusVal = document.getElementById("glab-cli-status");
     if (statusVal) {
-      statusVal.innerText = '未连接';
-      statusVal.className = 'status-val offline';
+      statusVal.innerText = "未连接";
+      statusVal.className = "status-val offline";
     }
-    document.getElementById('glab-init-prompt-btn').disabled = true;
-    updatePanelState('error', '连接断开');
+    document.getElementById("glab-init-prompt-btn").disabled = true;
+    updatePanelState("error", "连接断开");
     logToTerminal("与本地代理连接断开，5秒后自动重连...");
-    
+
     // 【核心安全保护】连接断开或未配置时，立刻注销监听器，停止执行任何动作
     observer.disconnect();
-    currentCLIRootDir = '';
-    
+    currentCLIRootDir = "";
+
     setTimeout(connectSocket, 5000);
   };
 }
 
+// 查找输入框容器 (适配 Gemini 与 ChatGPT)
+function findInputElement() {
+  // 1. ChatGPT #prompt-textarea 及其内部/层级 DOM
+  const chatgptBox =
+    document.querySelector('#prompt-textarea') ||
+    document.querySelector('div[id="prompt-textarea"]') ||
+    document.querySelector('textarea#prompt-textarea');
+  if (chatgptBox) {
+    if (
+      chatgptBox.getAttribute("contenteditable") === "true" ||
+      chatgptBox.tagName.toLowerCase() === "textarea"
+    ) {
+      return chatgptBox;
+    }
+    const innerEditable =
+      chatgptBox.querySelector('[contenteditable="true"]') ||
+      chatgptBox.querySelector("p");
+    if (innerEditable) return innerEditable;
+    return chatgptBox;
+  }
+
+  // 2. Gemini 可编辑框
+  const geminiInput =
+    document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+    document.querySelector('div[contenteditable="true"]');
+  if (geminiInput) return geminiInput;
+
+  // 3. 通用兜底
+  return document.querySelector("textarea");
+}
+
+// 查找发送按钮 (适配 Gemini 与 ChatGPT)
+function findSendButton() {
+  // 1. ChatGPT 特有按钮 (data-testid)
+  const gptSendBtn =
+    document.querySelector('button[data-testid="send-button"]') ||
+    document.querySelector('button[data-testid*="send"]');
+  if (gptSendBtn) return gptSendBtn;
+
+  // 2. Gemini 容器内按钮 (.send-button / gem-icon-button)
+  const container =
+    document.querySelector(".send-button") ||
+    document.querySelector('gem-icon-button[class*="send"]');
+  const innerButton = container ? container.querySelector("button") : null;
+  if (innerButton) return innerButton;
+
+  // 3. 多语言/通用 aria-label 判定
+  return (
+    document.querySelector('button[aria-label="发送"]') ||
+    document.querySelector('button[aria-label="发送消息"]') ||
+    document.querySelector('button[aria-label="Send message"]') ||
+    document.querySelector('button[aria-label="Send"]') ||
+    document.querySelector('button[aria-label="Send prompt"]') ||
+    document.querySelector('button[aria-label="发送 Prompt"]') ||
+    document.querySelector('button[aria-label*="发送"]') ||
+    document.querySelector('button[aria-label*="Send"]')
+  );
+}
+
 // 模拟回填并自动发送，支持携带待粘贴的文件列表与是否自动发送标记
 function replyToGemini(text, filesToPaste = [], autoSend = true) {
-  const inputEl = document.querySelector('div[contenteditable="true"][role="textbox"]');
+  const inputEl = findInputElement();
   if (!inputEl) {
-    logToTerminal("错误：未找到 Gemini 输入框，无法回填！");
-    updatePanelState('error', '未找到输入框');
+    logToTerminal("错误：未找到对话输入框（Gemini/ChatGPT），无法回填！");
+    updatePanelState("error", "未找到输入框");
     return;
   }
-  
-  updatePanelState('replying', autoSend ? '回填并发送中' : '回填完成，等待发送');
+
+  updatePanelState(
+    "replying",
+    autoSend ? "回填并发送中" : "回填完成，等待发送",
+  );
   inputEl.focus();
 
-  // 清空输入框
-  document.execCommand('selectAll', false, null);
-  document.execCommand('delete', false, null);
-  
-  // 将换行符转为 <br>，并对其余 HTML 特特殊字符进行安全转义，以防被解析为恶意 DOM 节点
+  const isTextarea = inputEl.tagName.toLowerCase() === "textarea";
+
+  // 将换行符转为 <br>，并对其余 HTML 特殊字符进行安全转义，以防被解析为恶意 DOM 节点
   const htmlContent = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -839,20 +941,37 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
     .replace(/'/g, "&#039;")
     .replace(/\n/g, "<br>");
 
-  // 记录写入前的文本
   const textBeforeInsert = inputEl.textContent;
 
-  // 必须使用 insertHTML 才能完整保留换行符，且确保 React 前端状态同步
-  document.execCommand('insertHTML', false, htmlContent);
-  
-  // 兜底策略：如果通过 execCommand 写入失败（文本没有发生变化，且内容不为空），使用 innerHTML 直接强行写入
-  if (inputEl.textContent === textBeforeInsert && text.trim() !== '') {
-    logToTerminal("警告：execCommand 写入失效，触发 innerHTML 强行回填机制...");
-    inputEl.innerHTML = htmlContent;
+  if (isTextarea) {
+    inputEl.value = text;
+  } else {
+    // 清空输入框
+    document.execCommand("selectAll", false, null);
+    document.execCommand("delete", false, null);
+
+    // 必须优先尝试 insertHTML 才能完整保留换行符，且确保 React / ProseMirror 前端状态同步
+    const inserted = document.execCommand("insertHTML", false, htmlContent);
+
+    // 兜底策略 1：如果 insertHTML 写入失效，尝试 insertText
+    if (
+      (!inserted || inputEl.textContent === textBeforeInsert) &&
+      text.trim() !== ""
+    ) {
+      document.execCommand("insertText", false, text);
+    }
+
+    // 兜底策略 2：如果依旧没有生效，通过 innerHTML 强行改写
+    if (inputEl.textContent === textBeforeInsert && text.trim() !== "") {
+      logToTerminal(
+        "警告：execCommand 写入失效，触发 innerHTML 强行回填机制...",
+      );
+      inputEl.innerHTML = htmlContent;
+    }
   }
 
-  inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-  inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+  inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+  inputEl.dispatchEvent(new Event("change", { bubbles: true }));
 
   // 如果有待粘贴的文件，逐个进行模拟粘贴
   if (filesToPaste && filesToPaste.length > 0) {
@@ -860,10 +979,10 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
     for (const file of filesToPaste) {
       const dataTransfer = new DataTransfer();
       dataTransfer.items.add(file);
-      const pasteEvent = new ClipboardEvent('paste', {
+      const pasteEvent = new ClipboardEvent("paste", {
         bubbles: true,
         cancelable: true,
-        clipboardData: dataTransfer
+        clipboardData: dataTransfer,
       });
       inputEl.dispatchEvent(pasteEvent);
       logToTerminal(`文件 [${file.name}] 已完成粘贴。`);
@@ -871,29 +990,23 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
   }
 
   if (autoSend) {
-    const sendDelay = (filesToPaste && filesToPaste.length > 0) ? 1000 : 500;
+    const sendDelay = filesToPaste && filesToPaste.length > 0 ? 1000 : 500;
     setTimeout(() => {
-      // 1. 尝试定位发送按钮（考虑 Angular/Material 结构，例如 .send-button button 或 button[aria-label="发送"]）
-      const container = document.querySelector('.send-button') || 
-                        document.querySelector('gem-icon-button[class*="send"]');
-      const innerButton = container ? container.querySelector('button') : null;
-      const sendButton = innerButton || 
-                         document.querySelector('button[aria-label="发送"]') ||
-                         document.querySelector('button[aria-label="发送消息"]') ||
-                         document.querySelector('button[aria-label="Send message"]') ||
-                         document.querySelector('button[aria-label="Send"]') ||
-                         document.querySelector('button[aria-label*="发送"]') ||
-                         document.querySelector('button[aria-label*="Send"]');
+      const sendButton = findSendButton();
 
       if (sendButton) {
         // 2. 检查是否处于禁用状态 (检测 disabled 属性和 aria-disabled 状态)
         const checkDisabled = () => {
-          if (sendButton.disabled || sendButton.hasAttribute('disabled')) return true;
-          if (sendButton.getAttribute('aria-disabled') === 'true') return true;
-          const parentContainer = sendButton.closest('gem-icon-button') || sendButton.closest('.send-button');
+          if (sendButton.disabled || sendButton.hasAttribute("disabled"))
+            return true;
+          if (sendButton.getAttribute("aria-disabled") === "true") return true;
+          const parentContainer =
+            sendButton.closest("gem-icon-button") ||
+            sendButton.closest(".send-button");
           if (parentContainer) {
-            if (parentContainer.getAttribute('aria-disabled') === 'true') return true;
-            if (parentContainer.classList.contains('disabled')) return true;
+            if (parentContainer.getAttribute("aria-disabled") === "true")
+              return true;
+            if (parentContainer.classList.contains("disabled")) return true;
           }
           return false;
         };
@@ -904,22 +1017,26 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
         const interval = setInterval(() => {
           attempts++;
           const isDisabled = checkDisabled();
-          
+
           // 每隔 2 秒 (10次尝试) 或首次尝试时打印一次等待日志，避免频繁刷屏
           if (attempts % 10 === 0 || attempts === 1) {
-            logToTerminal(`等待发送按钮启用中 (已等待 ${((attempts * 200) / 1000).toFixed(1)} 秒)...`);
+            logToTerminal(
+              `等待发送按钮启用中 (已等待 ${((attempts * 200) / 1000).toFixed(1)} 秒)...`,
+            );
           }
 
           if (!isDisabled) {
             sendButton.click();
             logToTerminal("上传完成，已成功点击发送。");
             clearInterval(interval);
-            
+
             // 自动重置连续运行步骤计数器，防止阻碍下一轮自动发送
             autoRunDepth = 0;
             updateDepthCounter();
           } else if (attempts >= maxAttempts) {
-            logToTerminal("错误：发送按钮在 30 秒内未能启用，自动发送已取消，请手动点击发送。");
+            logToTerminal(
+              "错误：发送按钮在 30 秒内未能启用，自动发送已取消，请手动点击发送。",
+            );
             clearInterval(interval);
           }
         }, 200);
@@ -929,8 +1046,10 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
     }, sendDelay);
   } else {
     setTimeout(() => {
-      updatePanelState('idle', '已就绪');
-      logToTerminal("回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...");
+      updatePanelState("idle", "已就绪");
+      logToTerminal(
+        "回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...",
+      );
     }, 500);
   }
 }
@@ -941,11 +1060,14 @@ async function handleCLIResponse(response) {
   logToTerminal(`收到执行结果 [${id}]: ${status} (autoSend: ${autoSend})`);
 
   // 分片写入自动授权缓存的清理
-  if (action === 'write_file_chunk') {
+  if (action === "write_file_chunk") {
     const path = activeChunkWrites.get(id);
     if (path) {
       activeChunkWrites.delete(id);
-      if (status === 'error' || (status === 'success' && data && data.message === '全部分片写入完成')) {
+      if (
+        status === "error" ||
+        (status === "success" && data && data.message === "全部分片写入完成")
+      ) {
         approvedChunkPaths.delete(path);
         logToTerminal(`分片写入结束或出错，清理缓存授权路径: ${path}`);
       }
@@ -956,14 +1078,18 @@ async function handleCLIResponse(response) {
     // 如果是 paste_file 成功，我们将其解析并暂存在 queueFilesToPaste 中
     if (status === "success" && action === "paste_file" && data) {
       try {
-        const file = await base64ToFile(data.base64Data, data.mimeType, data.filename);
+        const file = await base64ToFile(
+          data.base64Data,
+          data.mimeType,
+          data.filename,
+        );
         queueFilesToPaste.push(file);
         logToTerminal(`文件 [${file.name}] 成功解码并加入待粘贴列表。`);
-        
+
         // 缩减大体积 Base64 数据以防填充到页面输入框中
         response.data = {
           ...data,
-          base64Data: `[Base64 Data: ${data.base64Data.length} chars, automatically hidden in text prompt]`
+          base64Data: `[Base64 Data: ${data.base64Data.length} chars, automatically hidden in text prompt]`,
         };
       } catch (e) {
         logToTerminal(`文件解码失败: ${e.message}`);
@@ -972,7 +1098,7 @@ async function handleCLIResponse(response) {
 
     // 队列模式：收集结果，触发串行队列中的下一项
     queueResultsCollector.push(response);
-    
+
     // 如果子任务执行失败，直接熔断（停止后续执行）并汇总回填结果
     if (status === "error") {
       logToTerminal(`[队列调度] 子任务 [${id}] 执行失败，触发队列熔断。`);
@@ -990,17 +1116,25 @@ async function handleCLIResponse(response) {
       if (action === "paste_file" && data) {
         displayData = {
           ...data,
-          base64Data: `[Base64 Data: ${data.base64Data.length} chars, automatically hidden in text prompt]`
+          base64Data: `[Base64 Data: ${data.base64Data.length} chars, automatically hidden in text prompt]`,
         };
       }
       feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(displayData, null, 2)}\n\`\`\``;
       if (action === "paste_file" && data) {
         try {
-          const file = await base64ToFile(data.base64Data, data.mimeType, data.filename);
+          const file = await base64ToFile(
+            data.base64Data,
+            data.mimeType,
+            data.filename,
+          );
           replyToGemini(feedbackText, [file], shouldAutoSend);
         } catch (e) {
           logToTerminal(`文件解码失败: ${e.message}`);
-          replyToGemini(feedbackText + `\n解码失败: ${e.message}`, [], shouldAutoSend);
+          replyToGemini(
+            feedbackText + `\n解码失败: ${e.message}`,
+            [],
+            shouldAutoSend,
+          );
         }
       } else {
         replyToGemini(feedbackText, [], shouldAutoSend);
@@ -1017,25 +1151,28 @@ async function handleCLIResponse(response) {
 // ==========================================
 function executeNextQueueTask() {
   if (activeTaskQueue.length === 0) {
-    const lastResponse = queueResultsCollector[queueResultsCollector.length - 1];
+    const lastResponse =
+      queueResultsCollector[queueResultsCollector.length - 1];
     const lastAutoSend = lastResponse ? lastResponse.autoSend : undefined;
     finishQueueExecution(lastAutoSend);
     return;
   }
 
   const currentTask = activeTaskQueue.shift();
-  logToTerminal(`[队列调度] 启动子任务 [${currentTask.action}] ID: ${currentTask.id}`);
+  logToTerminal(
+    `[队列调度] 启动子任务 [${currentTask.action}] ID: ${currentTask.id}`,
+  );
   handleInstructionFlow(currentTask);
 }
 
 function finishQueueExecution(autoSend) {
   logToTerminal("多流程任务队列执行结束，正在汇总结果并自动回填...");
-  
+
   let feedbackText = `【GLAB 多流程任务执行结果汇总反馈】\n\n`;
-  
+
   // 汇总已执行子任务结果
   queueResultsCollector.forEach((res, index) => {
-    feedbackText += `### [子任务 ${index + 1}] ID: ${res.id} (${res.status === 'success' ? '🟢 成功' : '🔴 失败'})\n`;
+    feedbackText += `### [子任务 ${index + 1}] ID: ${res.id} (${res.status === "success" ? "🟢 成功" : "🔴 失败"})\n`;
     if (res.status === "success") {
       feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(res.data, null, 2)}\n\`\`\`\n\n`;
     } else {
@@ -1074,15 +1211,18 @@ function scanAndExecuteInstructions() {
 
   // 先同步加载当前 URL 对应会话下的已执行 ID 记录
   syncConvExecutedIds(() => {
-    const unprocessedBlocks = document.querySelectorAll('pre code:not([data-glab-processed])');
+    const unprocessedBlocks = document.querySelectorAll(
+      "pre code:not([data-glab-processed])",
+    );
     if (unprocessedBlocks.length === 0) return;
 
     // 获取页面中所有的 GLAB 代码块，以便建立稳定的序号序列（保证页面刷新后历史任务 ID 映射的稳定性）
-    const allCodeBlocks = Array.from(document.querySelectorAll('pre code'));
-    const glabBlocks = allCodeBlocks.filter(codeEl => {
+    const allCodeBlocks = Array.from(document.querySelectorAll("pre code"));
+    const glabBlocks = allCodeBlocks.filter((codeEl) => {
       const text = codeEl.textContent.trim();
-      const isGlabClass = codeEl.classList.contains('language-glab-call');
-      const hasInstructionKeywords = text.includes('"action"') && text.includes('"params"');
+      const isGlabClass = codeEl.classList.contains("language-glab-call");
+      const hasInstructionKeywords =
+        text.includes('"action"') && text.includes('"params"');
       return isGlabClass || hasInstructionKeywords;
     });
 
@@ -1091,13 +1231,14 @@ function scanAndExecuteInstructions() {
 
     unprocessedBlocks.forEach((codeEl) => {
       const text = codeEl.textContent.trim();
-      const isGlabClass = codeEl.classList.contains('language-glab-call');
-      const hasInstructionKeywords = text.includes('"action"') && text.includes('"params"');
+      const isGlabClass = codeEl.classList.contains("language-glab-call");
+      const hasInstructionKeywords =
+        text.includes('"action"') && text.includes('"params"');
 
       if (isGlabClass || hasInstructionKeywords) {
-        codeEl.setAttribute('data-glab-processed', 'true');
+        codeEl.setAttribute("data-glab-processed", "true");
         const blockIndex = glabBlocks.indexOf(codeEl);
-        
+
         try {
           const parsed = JSON.parse(text);
           if (Array.isArray(parsed)) {
@@ -1110,14 +1251,20 @@ function scanAndExecuteInstructions() {
                 task.id = uniqueId;
 
                 // 兼容性校验：检查 uniqueId 或原始 originalId 是否已执行过
-                const alreadyExecuted = currentConvExecutedIds.has(uniqueId) || currentConvExecutedIds.has(originalId);
+                const alreadyExecuted =
+                  currentConvExecutedIds.has(uniqueId) ||
+                  currentConvExecutedIds.has(originalId);
                 if (!alreadyExecuted) {
                   pendingTasks.push(task);
                 } else {
-                  logToTerminal(`提示：多任务子项 [${uniqueId}] 已执行过，自动忽略。`);
+                  logToTerminal(
+                    `提示：多任务子项 [${uniqueId}] 已执行过，自动忽略。`,
+                  );
                 }
               } else {
-                logToTerminal("警告：多任务子项未包含有效 ID，安全起见拒绝执行。");
+                logToTerminal(
+                  "警告：多任务子项未包含有效 ID，安全起见拒绝执行。",
+                );
               }
             });
           } else {
@@ -1132,16 +1279,20 @@ function scanAndExecuteInstructions() {
             parsed.id = uniqueId;
 
             // 兼容性校验：检查 uniqueId 或原始 originalId 是否已执行过
-            const alreadyExecuted = currentConvExecutedIds.has(uniqueId) || currentConvExecutedIds.has(originalId);
+            const alreadyExecuted =
+              currentConvExecutedIds.has(uniqueId) ||
+              currentConvExecutedIds.has(originalId);
             if (alreadyExecuted) {
-              logToTerminal(`提示：指令 ID [${uniqueId}] 在当前对话中已执行过，已自动跳过。`);
+              logToTerminal(
+                `提示：指令 ID [${uniqueId}] 在当前对话中已执行过，已自动跳过。`,
+              );
               return;
             }
             pendingTasks.push(parsed);
           }
         } catch (e) {
           console.error("[GLAB] 指令 JSON 解析失败:", e);
-          updatePanelState('error', '指令解析错误');
+          updatePanelState("error", "指令解析错误");
           logToTerminal(`指令 JSON 解析失败: ${e.message}`);
         }
       }
@@ -1149,7 +1300,7 @@ function scanAndExecuteInstructions() {
 
     if (pendingTasks.length > 0) {
       // 写入存储强缓存
-      pendingTasks.forEach(task => currentConvExecutedIds.add(task.id));
+      pendingTasks.forEach((task) => currentConvExecutedIds.add(task.id));
       const storageKey = `glab_history_${currentConvId}`;
       const updatedList = Array.from(currentConvExecutedIds);
       if (updatedList.length > 300) {
@@ -1167,13 +1318,15 @@ function scanAndExecuteInstructions() {
         queueResultsCollector = [];
         activeTaskQueue = pendingTasks;
         queueFilesToPaste = [];
-        
-        logToTerminal(`启动多流程队列模式，共 [${activeTaskQueue.length}] 个任务待执行。`);
-        
+
+        logToTerminal(
+          `启动多流程队列模式，共 [${activeTaskQueue.length}] 个任务待执行。`,
+        );
+
         // 队列占用整体 1 个步骤深度
         autoRunDepth++;
         updateDepthCounter();
-        
+
         executeNextQueueTask();
       } else {
         // 单步模式
@@ -1186,7 +1339,7 @@ function scanAndExecuteInstructions() {
       if (!isQueueModeActive) {
         autoRunDepth = 0;
         updateDepthCounter();
-        updatePanelState('idle', '已就绪');
+        updatePanelState("idle", "已就绪");
         logToTerminal("未发现新指令，步骤深度已重置。");
       }
     }
@@ -1195,33 +1348,40 @@ function scanAndExecuteInstructions() {
 
 // 向 CLI 发送指令，并在发送分片写入时暂存映射关系
 function sendRequestToCLI(request) {
-  if (request.action === 'write_file_chunk' && request.params) {
+  if (request.action === "write_file_chunk" && request.params) {
     activeChunkWrites.set(request.id, request.params.path);
   }
   socket.send(JSON.stringify(request));
 }
 
 function handleInstructionFlow(request) {
-  const readOnlyActions = ['list_dir', 'read_file', 'list_skills', 'load_skill', 'paste_file'];
+  const readOnlyActions = [
+    "list_dir",
+    "read_file",
+    "list_skills",
+    "load_skill",
+    "paste_file",
+  ];
 
   if (autoRunDepth >= 10) {
-    updatePanelState('error', '步骤超限锁定');
+    updatePanelState("error", "步骤超限锁定");
     logToTerminal("警告：连续步骤已达上限 10 步，强行终止，请手动继续。");
     return;
   }
 
   // 检查是否是已被用户手动授权的后续分片（chunkIndex > 0 且路径已批准）
-  const isApprovedChunk = request.action === 'write_file_chunk' &&
-                          request.params &&
-                          request.params.chunkIndex > 0 &&
-                          approvedChunkPaths.has(request.params.path);
+  const isApprovedChunk =
+    request.action === "write_file_chunk" &&
+    request.params &&
+    request.params.chunkIndex > 0 &&
+    approvedChunkPaths.has(request.params.path);
 
   if (readOnlyActions.includes(request.action)) {
     if (!isQueueModeActive) {
       autoRunDepth++;
       updateDepthCounter();
     }
-    updatePanelState('executing', 'CLI 执行中');
+    updatePanelState("executing", "CLI 执行中");
     logToTerminal(`自动投递 [只读]: [${request.action}] ID: ${request.id}`);
     sendRequestToCLI(request);
   } else {
@@ -1230,11 +1390,16 @@ function handleInstructionFlow(request) {
         autoRunDepth++;
         updateDepthCounter();
       }
-      updatePanelState('executing', isApprovedChunk ? 'CLI 自动执行中 (分片追加)' : 'CLI 自动执行中');
-      logToTerminal(`自动投递 [写入${isApprovedChunk ? '分片' : ''}]: [${request.action}] ID: ${request.id}`);
+      updatePanelState(
+        "executing",
+        isApprovedChunk ? "CLI 自动执行中 (分片追加)" : "CLI 自动执行中",
+      );
+      logToTerminal(
+        `自动投递 [写入${isApprovedChunk ? "分片" : ""}]: [${request.action}] ID: ${request.id}`,
+      );
       sendRequestToCLI(request);
     } else {
-      updatePanelState('pending', '等待授权确认');
+      updatePanelState("pending", "等待授权确认");
       logToTerminal(`指令挂起等待授权: [${request.action}] ID: ${request.id}`);
       showConfirmUI(request);
     }
@@ -1242,34 +1407,38 @@ function handleInstructionFlow(request) {
 }
 
 function updateDepthCounter() {
-  const counter = document.getElementById('glab-depth-counter');
+  const counter = document.getElementById("glab-depth-counter");
   if (counter) {
     counter.innerText = `${autoRunDepth} / 10`;
   }
 }
 
 function showConfirmUI(request) {
-  const diffContainer = document.getElementById('glab-diff-container');
-  const diffMeta = document.getElementById('glab-diff-meta');
-  const diffView = document.getElementById('glab-diff-view');
+  const diffContainer = document.getElementById("glab-diff-container");
+  const diffMeta = document.getElementById("glab-diff-meta");
+  const diffView = document.getElementById("glab-diff-view");
 
   if (!diffContainer || !diffMeta || !diffView) return;
 
   diffMeta.innerText = `指令: ${request.action} (ID: ${request.id})`;
   diffView.textContent = JSON.stringify(request.params, null, 2);
-  diffContainer.style.display = 'block';
+  diffContainer.style.display = "block";
 
   // 展开抽屉，确保用户能看到
-  const drawer = document.getElementById('glab-drawer');
-  if (drawer) drawer.classList.add('open');
+  const drawer = document.getElementById("glab-drawer");
+  if (drawer) drawer.classList.add("open");
 
-  document.getElementById('glab-btn-approve').onclick = () => {
-    diffContainer.style.display = 'none';
-    updatePanelState('executing', '授权指令执行中');
+  document.getElementById("glab-btn-approve").onclick = () => {
+    diffContainer.style.display = "none";
+    updatePanelState("executing", "授权指令执行中");
     logToTerminal(`用户已批准指令: ${request.id}`);
-    
+
     // 如果是分片写入的第 0 片被批准，将路径记录到 approvedChunkPaths 中
-    if (request.action === 'write_file_chunk' && request.params && request.params.chunkIndex === 0) {
+    if (
+      request.action === "write_file_chunk" &&
+      request.params &&
+      request.params.chunkIndex === 0
+    ) {
       approvedChunkPaths.add(request.params.path);
       logToTerminal(`分片写入被授权，路径已加入缓存: ${request.params.path}`);
     }
@@ -1281,13 +1450,13 @@ function showConfirmUI(request) {
     sendRequestToCLI(request);
   };
 
-  document.getElementById('glab-btn-reject').onclick = () => {
-    diffContainer.style.display = 'none';
-    updatePanelState('idle', '已拒绝');
+  document.getElementById("glab-btn-reject").onclick = () => {
+    diffContainer.style.display = "none";
+    updatePanelState("idle", "已拒绝");
     logToTerminal(`用户已拒绝指令: ${request.id}`);
-    
+
     // 如果用户拒绝，且是分片写入，清理对应路径的授权缓存
-    if (request.action === 'write_file_chunk' && request.params) {
+    if (request.action === "write_file_chunk" && request.params) {
       approvedChunkPaths.delete(request.params.path);
     }
 
@@ -1295,7 +1464,7 @@ function showConfirmUI(request) {
       queueResultsCollector.push({
         id: request.id,
         status: "error",
-        error: "用户拒绝授权执行该敏感操作"
+        error: "用户拒绝授权执行该敏感操作",
       });
       finishQueueExecution();
     }
@@ -1303,31 +1472,40 @@ function showConfirmUI(request) {
 }
 
 // 监听手动发送：点击发送按钮（用 closest 兼容子元素点击）
-document.addEventListener('click', (e) => {
-  if (e.target.closest('button[aria-label="发送"]') ||
-      e.target.closest('button[aria-label="发送消息"]') ||
-      e.target.closest('button[aria-label="Send message"]') ||
-      e.target.closest('button[aria-label="Send"]') ||
-      e.target.closest('button[aria-label*="发送"]') ||
-      e.target.closest('button[aria-label*="Send"]') ||
-      e.target.closest('button.send-button') ||
-      e.target.closest('.send-button') ||
-      e.target.closest('gem-icon-button[class*="send"]')) {
+document.addEventListener("click", (e) => {
+  if (
+    e.target.closest('button[data-testid="send-button"]') ||
+    e.target.closest('button[data-testid*="send"]') ||
+    e.target.closest('button[aria-label="发送"]') ||
+    e.target.closest('button[aria-label="发送消息"]') ||
+    e.target.closest('button[aria-label="Send message"]') ||
+    e.target.closest('button[aria-label="Send"]') ||
+    e.target.closest('button[aria-label="Send prompt"]') ||
+    e.target.closest('button[aria-label="发送 Prompt"]') ||
+    e.target.closest('button[aria-label*="发送"]') ||
+    e.target.closest('button[aria-label*="Send"]') ||
+    e.target.closest("button.send-button") ||
+    e.target.closest(".send-button") ||
+    e.target.closest('gem-icon-button[class*="send"]')
+  ) {
     autoRunDepth = 0;
     updateDepthCounter();
   }
 });
 
-// 监听手动发送：回车键（兼容 textbox 和 contenteditable）
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' || e.shiftKey) return;
+// 监听手动发送：回车键（兼容 prompt-textarea, textbox, contenteditable 和 textarea）
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey) return;
   const target = e.target;
-  const isInInputBox = target && (
-    target.getAttribute('contenteditable') === 'true' ||
-    target.getAttribute('role') === 'textbox' ||
-    !!target.closest('[contenteditable="true"]') ||
-    !!target.closest('[role="textbox"]')
-  );
+  const isInInputBox =
+    target &&
+    (target.id === "prompt-textarea" ||
+      target.getAttribute("contenteditable") === "true" ||
+      target.getAttribute("role") === "textbox" ||
+      target.tagName === "TEXTAREA" ||
+      !!target.closest("#prompt-textarea") ||
+      !!target.closest('[contenteditable="true"]') ||
+      !!target.closest('[role="textbox"]'));
   if (isInInputBox) {
     autoRunDepth = 0;
     updateDepthCounter();
@@ -1340,22 +1518,34 @@ document.addEventListener('keydown', (e) => {
 const observer = new MutationObserver(() => {
   if (generateTimer) clearTimeout(generateTimer);
 
-  const hasStopBtn = !!document.querySelector('button[aria-label="停止回复"]') ||
-                     !!document.querySelector('button[aria-label="停止生成"]');
-  const hasLoading = !!document.querySelector('.loading-indicator') || 
-                     !!document.querySelector('[aria-busy="true"]');
+  const hasStopBtn =
+    !!document.querySelector('button[data-testid="stop-button"]') ||
+    !!document.querySelector('button[data-testid*="stop"]') ||
+    !!document.querySelector('button[aria-label="停止回复"]') ||
+    !!document.querySelector('button[aria-label="停止生成"]') ||
+    !!document.querySelector('button[aria-label="停止响应"]') ||
+    !!document.querySelector('button[aria-label="Stop generating"]') ||
+    !!document.querySelector('button[aria-label*="Stop"]') ||
+    !!document.querySelector('button[aria-label*="停止"]');
+
+  const hasLoading =
+    !!document.querySelector(".loading-indicator") ||
+    !!document.querySelector(".result-streaming") ||
+    !!document.querySelector('[aria-busy="true"]');
 
   const isCurrentlyGenerating = hasStopBtn || hasLoading;
 
   if (isCurrentlyGenerating) {
     isGenerating = true;
-    updatePanelState('parsing', '解析指令中');
+    updatePanelState("parsing", "解析指令中");
   } else {
     // 只有经历过生成状态后停止，才触发扫描，防止 DOM 其他变化引发死循环
     generateTimer = setTimeout(() => {
       if (isGenerating) {
         isGenerating = false;
-        console.log('[GLAB Timer] AI 流结束，触发 scanAndExecuteInstructions()');
+        console.log(
+          "[GLAB Timer] AI 流结束，触发 scanAndExecuteInstructions()",
+        );
         scanAndExecuteInstructions();
       }
     }, 500);

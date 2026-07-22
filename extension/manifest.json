@@ -1,23 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "Gemini Local Agent Bridge (GLAB)",
-  "version": "2.2",
-  "description": "连接 Web 端 Gemini 与本地开发环境的安全 Agent 协同桥梁",
+  "name": "Gemini & ChatGPT Local Agent Bridge (GLAB)",
+  "version": "2.3",
+  "description": "连接 Web 端 Gemini / ChatGPT 与本地开发环境的安全 Agent 协同桥梁",
   "permissions": [
     "activeTab",
     "storage"
   ],
   "host_permissions": [
-    "https://gemini.google.com/*"
+    "https://gemini.google.com/*",
+    "https://chatgpt.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://gemini.google.com/*"],
+      "matches": [
+        "https://gemini.google.com/*",
+        "https://chatgpt.com/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_end"
     }
   ]
 }
+
