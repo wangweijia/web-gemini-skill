@@ -8,6 +8,8 @@ let isGenerating = false;
 let generateTimer = null;
 let autoRunDepth = 0;
 let isAutoRunEnabled = true;
+let isAutoVerifyEnabled = false;
+let pendingAutoVerify = false; // one-shot flag set after queue completes, triggers verify on next idle AI turn
 let currentCLIRootDir = ""; // 暂存由本地 CLI 握手发送过来的根工作目录
 let currentConvId = ""; // 当前对话的唯一标识
 let currentConvExecutedIds = new Set(); // 当前对话已执行过的指令 ID 强缓存 Set
@@ -81,7 +83,6 @@ function getConversationId() {
   return "default_session";
 }
 
-
 let isStorageLoading = false;
 let storageCallbacksQueue = [];
 
@@ -138,8 +139,7 @@ function injectGLABPanel() {
   floatBall.id = "glab-float-ball";
   floatBall.className = "idle";
   floatBall.title = "GLAB Agent: 空闲中";
-  floatBall.innerHTML =
-    '<span class="ball-icon">🤖</span><span class="status-indicator"></span>';
+  floatBall.innerHTML = '<span class="ball-icon">🤖</span><span class="status-indicator"></span>';
 
   // 抽屉面板
   const drawer = document.createElement("div");
@@ -163,6 +163,13 @@ function injectGLABPanel() {
           <span class="label">Auto-run 模式</span>
           <label class="switch">
             <input type="checkbox" id="glab-autorun-toggle" checked>
+            <span class="slider round"></span>
+          </label>
+        </div>
+        <div class="status-item">
+          <span class="label">Auto-verify 校验</span>
+          <label class="switch">
+            <input type="checkbox" id="glab-autoverify-toggle">
             <span class="slider round"></span>
           </label>
         </div>
@@ -194,6 +201,9 @@ function injectGLABPanel() {
           <div class="action-buttons">
             <button id="glab-save-config-btn" class="glab-btn primary">保存配置</button>
             <button id="glab-init-prompt-btn" class="glab-btn success" disabled>🚀 初始化对话规则</button>
+          </div>
+          <div class="action-buttons" style="margin-top: 4px;">
+            <button id="glab-verify-btn" class="glab-btn verify" disabled>🔍 发送校验</button>
           </div>
         </div>
       </div>
@@ -473,6 +483,9 @@ function injectGLABPanel() {
       animation: glab-pulse-green 1.5s infinite;
     }
     .glab-btn.success-pulse:hover { background: #059669; }
+    .glab-btn.verify { background: #f59e0b; }
+    .glab-btn.verify:hover:not(:disabled) { background: #d97706; }
+    .glab-btn.verify:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* Auto-run Toggle Switch */
     .switch {
@@ -590,6 +603,7 @@ function injectGLABPanel() {
     if (res.workDir) {
       document.getElementById("glab-input-workdir").value = res.workDir;
       document.getElementById("glab-init-prompt-btn").disabled = false;
+      document.getElementById("glab-verify-btn").disabled = false;
     }
     if (res.skillsDir) {
       document.getElementById("glab-input-skillsdir").value = res.skillsDir;
@@ -612,79 +626,78 @@ function injectGLABPanel() {
     drawer.classList.remove("open");
   });
 
-  document
-    .getElementById("glab-autorun-toggle")
-    .addEventListener("change", (e) => {
-      isAutoRunEnabled = e.target.checked;
-      logToTerminal(`Auto-run 模式已${isAutoRunEnabled ? "开启" : "关闭"}`);
-    });
+  document.getElementById("glab-autorun-toggle").addEventListener("change", (e) => {
+    isAutoRunEnabled = e.target.checked;
+    logToTerminal(`Auto-run 模式已${isAutoRunEnabled ? "开启" : "关闭"}`);
+  });
+
+  document.getElementById("glab-autoverify-toggle").addEventListener("change", (e) => {
+    isAutoVerifyEnabled = e.target.checked;
+    logToTerminal(`Auto-verify 模式已${isAutoVerifyEnabled ? "开启，队列执行完成后将自动触发校验" : "关闭"}`);
+  });
+
+  document.getElementById("glab-verify-btn").addEventListener("click", () => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      logToTerminal("错误：WebSocket 未连接，无法触发校验");
+      return;
+    }
+    triggerVerifyPrompt();
+    drawer.classList.remove("open");
+  });
 
   // 通过 CLI 唤起原生文件夹选择框
-  document
-    .getElementById("glab-select-dir-btn")
-    .addEventListener("click", () => {
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        alert("错误：请先保证 WebSocket 服务已成功连接！");
+  document.getElementById("glab-select-dir-btn").addEventListener("click", () => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      alert("错误：请先保证 WebSocket 服务已成功连接！");
+      return;
+    }
+    logToTerminal("正在通过 CLI 唤起本地系统文件夹选择器...");
+    const selectId = `select_dir_${Date.now()}`;
+    socket.send(
+      JSON.stringify({
+        id: selectId,
+        action: "select_directory",
+      }),
+    );
+  });
+
+  document.getElementById("glab-save-config-btn").addEventListener("click", () => {
+    const workDir = document.getElementById("glab-input-workdir").value.trim();
+    const skillsDir = document.getElementById("glab-input-skillsdir").value.trim();
+    const wsPortInput = document.getElementById("glab-input-wsport").value.trim();
+    const port = wsPortInput ? parseInt(wsPortInput, 10) : 9003;
+
+    if (!workDir) {
+      alert("错误：工作根目录不能为空！");
+      return;
+    }
+    if (isNaN(port) || port <= 0 || port > 65535) {
+      alert("错误：非法的端口号！");
+      return;
+    }
+
+    wsPort = port;
+
+    safeSetStorage({ workDir, skillsDir, wsPort }, () => {
+      logToTerminal(`配置已保存！工作目录: ${workDir}, 端口: ${wsPort}`);
+      document.getElementById("glab-init-prompt-btn").disabled = false;
+      document.getElementById("glab-verify-btn").disabled = false;
+      if (socket) socket.close();
+      connectSocket();
+    });
+  });
+
+  document.getElementById("glab-init-prompt-btn").addEventListener("click", () => {
+    safeGetStorage(["workDir", "skillsDir"], (res) => {
+      if (!res.workDir) {
+        alert("错误：请先设置工作目录！");
         return;
       }
-      logToTerminal("正在通过 CLI 唤起本地系统文件夹选择器...");
-      const selectId = `select_dir_${Date.now()}`;
-      socket.send(
-        JSON.stringify({
-          id: selectId,
-          action: "select_directory",
-        }),
-      );
+      const prompt = generateInitPrompt(res.workDir, res.skillsDir);
+      replyToGemini(prompt);
+      drawer.classList.remove("open");
     });
-
-  document
-    .getElementById("glab-save-config-btn")
-    .addEventListener("click", () => {
-      const workDir = document
-        .getElementById("glab-input-workdir")
-        .value.trim();
-      const skillsDir = document
-        .getElementById("glab-input-skillsdir")
-        .value.trim();
-      const wsPortInput = document
-        .getElementById("glab-input-wsport")
-        .value.trim();
-      const port = wsPortInput ? parseInt(wsPortInput, 10) : 9003;
-
-      if (!workDir) {
-        alert("错误：工作根目录不能为空！");
-        return;
-      }
-      if (isNaN(port) || port <= 0 || port > 65535) {
-        alert("错误：非法的端口号！");
-        return;
-      }
-
-      wsPort = port;
-
-      safeSetStorage({ workDir, skillsDir, wsPort }, () => {
-        logToTerminal(`配置已保存！工作目录: ${workDir}, 端口: ${wsPort}`);
-        document.getElementById("glab-init-prompt-btn").disabled = false;
-
-        // 重新建立连接，以进行握手检查
-        if (socket) socket.close();
-        connectSocket();
-      });
-    });
-
-  document
-    .getElementById("glab-init-prompt-btn")
-    .addEventListener("click", () => {
-      safeGetStorage(["workDir", "skillsDir"], (res) => {
-        if (!res.workDir) {
-          alert("错误：请先设置工作目录！");
-          return;
-        }
-        const prompt = generateInitPrompt(res.workDir, res.skillsDir);
-        replyToGemini(prompt);
-        drawer.classList.remove("open");
-      });
-    });
+  });
 }
 
 function updatePanelState(stateClass, label) {
@@ -735,22 +748,26 @@ function generateInitPrompt(workDir, skillsDir) {
   if (skillsDir) {
     prompt += `- \`list_skills\` / \`load_skill\` / \`run_skill\`：Skills 相关操作。\n`;
   }
+  prompt += `- \`relay_verify\`：将当前任务的问题、操作摘要和结论发送至另一个 AI 进行独立校验。params: { "target": "gpt"|"gemini", "question": "...", "actions_summary": "...", "conclusion": "...", "execution_log": [] (可选) }\n`;
+  prompt += `- \`relay_result\`：（由校验方使用）将校验结论发回给提案方。params: { "target": "gemini"|"gpt", "verdict": "PASS|WARN|FAIL", "confidence": 0-100, "issues": [], "suggestion": "..." }\n`;
+  prompt += `\n6. **跨模型校验规则**：当你完成一项重要任务后，如果需要确保结论的准确性，可以主动输出 \`relay_verify\` 指令将问题与结论发往另一个 AI 校验。校验结果返回后，你可以根据 verdict 决定是否需要修正方案。\n\n`;
   prompt += `\n4. **长文本写入策略**：当你需要新建或覆盖写入的文件内容大于 4KB 或 80 行时，**请务必不要**直接使用 \`write_file\` 或 \`update_file (overwrite)\` 一次性输出，因为这容易在前端触发 Markdown 渲染错误（如渲染成 Canvas）或因超出最大输出 token 而被中途截断。你必须主动选择 \`write_file_chunk\` 将内容按顺序拆分为数个分片进行分批次写入。每个分片内容应控制在 4KB / 80 行以内。\n\n`;
   prompt += `5. **等待反馈**：每次输出 \`\`\`glab-call 指令（或指令列表）后，停止继续输出，等待我将本地执行结果（若为多步骤，则是汇总结果）回传给你，再根据执行结论继续完成后续任务。\n\n`;
   prompt += `已准备就绪，工作目录已锁定为：${workDir}${skillsDir ? `，Skills 目录为：${skillsDir}` : ""}`;
   return prompt;
 }
 
+function detectRole() {
+  if (location.hostname.includes("gemini.google.com")) return "gemini";
+  if (location.hostname.includes("chatgpt.com")) return "gpt";
+  return "";
+}
+
 // ==========================================
 // 通信模块：WebSocket 长连接
 // ==========================================
 function connectSocket() {
-  if (
-    socket &&
-    (socket.readyState === WebSocket.OPEN ||
-      socket.readyState === WebSocket.CONNECTING)
-  )
-    return;
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
   const url = `ws://localhost:${wsPort}`;
   socket = new WebSocket(url);
@@ -772,6 +789,7 @@ function connectSocket() {
           params: {
             workDir: res.workDir || "",
             skillsDir: res.skillsDir || "",
+            role: detectRole(),
           },
         }),
       );
@@ -802,9 +820,7 @@ function connectSocket() {
 
           // 同步从 CLI 获取到的 skillsDir 到 UI 面板和本地存储中
           const cliSkillsDir = response.data.skillsDir || "";
-          const skillsDirInput = document.getElementById(
-            "glab-input-skillsdir",
-          );
+          const skillsDirInput = document.getElementById("glab-input-skillsdir");
           if (skillsDirInput && cliSkillsDir) {
             skillsDirInput.value = cliSkillsDir;
             safeSetStorage({ skillsDir: cliSkillsDir });
@@ -812,9 +828,7 @@ function connectSocket() {
 
           if (currentCLIRootDir) {
             document.getElementById("glab-init-prompt-btn").disabled = false;
-            logToTerminal(
-              `双端安全握手成功。工作根目录已锁定: ${currentCLIRootDir}`,
-            );
+            logToTerminal(`双端安全握手成功。工作根目录已锁定: ${currentCLIRootDir}`);
 
             // 【核心安全保护】只有握手锁定成功后，才挂载 Observer 开始监听页面消息
             observer.disconnect(); // 防止重复观察
@@ -822,9 +836,7 @@ function connectSocket() {
             logToTerminal("网页消息监听（Observer）已成功激活工作。");
           } else {
             document.getElementById("glab-init-prompt-btn").disabled = true;
-            logToTerminal(
-              "连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。",
-            );
+            logToTerminal("连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。");
             observer.disconnect();
           }
         } else {
@@ -832,6 +844,13 @@ function connectSocket() {
         }
         return;
       }
+
+      if (response.action === "relay_incoming") {
+        logToTerminal(`收到来自 [${response.from}] 的中转消息，正在回填...`);
+        replyToGemini(response.payload, [], response.autoSend !== false);
+        return;
+      }
+
       handleCLIResponse(response);
     } catch (e) {
       console.error("[GLAB] 解析本地消息失败:", e);
@@ -845,6 +864,7 @@ function connectSocket() {
       statusVal.className = "status-val offline";
     }
     document.getElementById("glab-init-prompt-btn").disabled = true;
+    document.getElementById("glab-verify-btn").disabled = true;
     updatePanelState("error", "连接断开");
     logToTerminal("与本地代理连接断开，5秒后自动重连...");
 
@@ -860,27 +880,20 @@ function connectSocket() {
 function findInputElement() {
   // 1. ChatGPT #prompt-textarea 及其内部/层级 DOM
   const chatgptBox =
-    document.querySelector('#prompt-textarea') ||
+    document.querySelector("#prompt-textarea") ||
     document.querySelector('div[id="prompt-textarea"]') ||
-    document.querySelector('textarea#prompt-textarea');
+    document.querySelector("textarea#prompt-textarea");
   if (chatgptBox) {
-    if (
-      chatgptBox.getAttribute("contenteditable") === "true" ||
-      chatgptBox.tagName.toLowerCase() === "textarea"
-    ) {
+    if (chatgptBox.getAttribute("contenteditable") === "true" || chatgptBox.tagName.toLowerCase() === "textarea") {
       return chatgptBox;
     }
-    const innerEditable =
-      chatgptBox.querySelector('[contenteditable="true"]') ||
-      chatgptBox.querySelector("p");
+    const innerEditable = chatgptBox.querySelector('[contenteditable="true"]') || chatgptBox.querySelector("p");
     if (innerEditable) return innerEditable;
     return chatgptBox;
   }
 
   // 2. Gemini 可编辑框
-  const geminiInput =
-    document.querySelector('div[contenteditable="true"][role="textbox"]') ||
-    document.querySelector('div[contenteditable="true"]');
+  const geminiInput = document.querySelector('div[contenteditable="true"][role="textbox"]') || document.querySelector('div[contenteditable="true"]');
   if (geminiInput) return geminiInput;
 
   // 3. 通用兜底
@@ -890,15 +903,11 @@ function findInputElement() {
 // 查找发送按钮 (适配 Gemini 与 ChatGPT)
 function findSendButton() {
   // 1. ChatGPT 特有按钮 (data-testid)
-  const gptSendBtn =
-    document.querySelector('button[data-testid="send-button"]') ||
-    document.querySelector('button[data-testid*="send"]');
+  const gptSendBtn = document.querySelector('button[data-testid="send-button"]') || document.querySelector('button[data-testid*="send"]');
   if (gptSendBtn) return gptSendBtn;
 
   // 2. Gemini 容器内按钮 (.send-button / gem-icon-button)
-  const container =
-    document.querySelector(".send-button") ||
-    document.querySelector('gem-icon-button[class*="send"]');
+  const container = document.querySelector(".send-button") || document.querySelector('gem-icon-button[class*="send"]');
   const innerButton = container ? container.querySelector("button") : null;
   if (innerButton) return innerButton;
 
@@ -924,10 +933,7 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
     return;
   }
 
-  updatePanelState(
-    "replying",
-    autoSend ? "回填并发送中" : "回填完成，等待发送",
-  );
+  updatePanelState("replying", autoSend ? "回填并发送中" : "回填完成，等待发送");
   inputEl.focus();
 
   const isTextarea = inputEl.tagName.toLowerCase() === "textarea";
@@ -954,18 +960,13 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
     const inserted = document.execCommand("insertHTML", false, htmlContent);
 
     // 兜底策略 1：如果 insertHTML 写入失效，尝试 insertText
-    if (
-      (!inserted || inputEl.textContent === textBeforeInsert) &&
-      text.trim() !== ""
-    ) {
+    if ((!inserted || inputEl.textContent === textBeforeInsert) && text.trim() !== "") {
       document.execCommand("insertText", false, text);
     }
 
     // 兜底策略 2：如果依旧没有生效，通过 innerHTML 强行改写
     if (inputEl.textContent === textBeforeInsert && text.trim() !== "") {
-      logToTerminal(
-        "警告：execCommand 写入失效，触发 innerHTML 强行回填机制...",
-      );
+      logToTerminal("警告：execCommand 写入失效，触发 innerHTML 强行回填机制...");
       inputEl.innerHTML = htmlContent;
     }
   }
@@ -997,15 +998,11 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
       if (sendButton) {
         // 2. 检查是否处于禁用状态 (检测 disabled 属性和 aria-disabled 状态)
         const checkDisabled = () => {
-          if (sendButton.disabled || sendButton.hasAttribute("disabled"))
-            return true;
+          if (sendButton.disabled || sendButton.hasAttribute("disabled")) return true;
           if (sendButton.getAttribute("aria-disabled") === "true") return true;
-          const parentContainer =
-            sendButton.closest("gem-icon-button") ||
-            sendButton.closest(".send-button");
+          const parentContainer = sendButton.closest("gem-icon-button") || sendButton.closest(".send-button");
           if (parentContainer) {
-            if (parentContainer.getAttribute("aria-disabled") === "true")
-              return true;
+            if (parentContainer.getAttribute("aria-disabled") === "true") return true;
             if (parentContainer.classList.contains("disabled")) return true;
           }
           return false;
@@ -1020,9 +1017,7 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
 
           // 每隔 2 秒 (10次尝试) 或首次尝试时打印一次等待日志，避免频繁刷屏
           if (attempts % 10 === 0 || attempts === 1) {
-            logToTerminal(
-              `等待发送按钮启用中 (已等待 ${((attempts * 200) / 1000).toFixed(1)} 秒)...`,
-            );
+            logToTerminal(`等待发送按钮启用中 (已等待 ${((attempts * 200) / 1000).toFixed(1)} 秒)...`);
           }
 
           if (!isDisabled) {
@@ -1034,9 +1029,7 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
             autoRunDepth = 0;
             updateDepthCounter();
           } else if (attempts >= maxAttempts) {
-            logToTerminal(
-              "错误：发送按钮在 30 秒内未能启用，自动发送已取消，请手动点击发送。",
-            );
+            logToTerminal("错误：发送按钮在 30 秒内未能启用，自动发送已取消，请手动点击发送。");
             clearInterval(interval);
           }
         }, 200);
@@ -1047,9 +1040,7 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
   } else {
     setTimeout(() => {
       updatePanelState("idle", "已就绪");
-      logToTerminal(
-        "回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...",
-      );
+      logToTerminal("回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...");
     }, 500);
   }
 }
@@ -1064,10 +1055,7 @@ async function handleCLIResponse(response) {
     const path = activeChunkWrites.get(id);
     if (path) {
       activeChunkWrites.delete(id);
-      if (
-        status === "error" ||
-        (status === "success" && data && data.message === "全部分片写入完成")
-      ) {
+      if (status === "error" || (status === "success" && data && data.message === "全部分片写入完成")) {
         approvedChunkPaths.delete(path);
         logToTerminal(`分片写入结束或出错，清理缓存授权路径: ${path}`);
       }
@@ -1078,11 +1066,7 @@ async function handleCLIResponse(response) {
     // 如果是 paste_file 成功，我们将其解析并暂存在 queueFilesToPaste 中
     if (status === "success" && action === "paste_file" && data) {
       try {
-        const file = await base64ToFile(
-          data.base64Data,
-          data.mimeType,
-          data.filename,
-        );
+        const file = await base64ToFile(data.base64Data, data.mimeType, data.filename);
         queueFilesToPaste.push(file);
         logToTerminal(`文件 [${file.name}] 成功解码并加入待粘贴列表。`);
 
@@ -1122,19 +1106,11 @@ async function handleCLIResponse(response) {
       feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(displayData, null, 2)}\n\`\`\``;
       if (action === "paste_file" && data) {
         try {
-          const file = await base64ToFile(
-            data.base64Data,
-            data.mimeType,
-            data.filename,
-          );
+          const file = await base64ToFile(data.base64Data, data.mimeType, data.filename);
           replyToGemini(feedbackText, [file], shouldAutoSend);
         } catch (e) {
           logToTerminal(`文件解码失败: ${e.message}`);
-          replyToGemini(
-            feedbackText + `\n解码失败: ${e.message}`,
-            [],
-            shouldAutoSend,
-          );
+          replyToGemini(feedbackText + `\n解码失败: ${e.message}`, [], shouldAutoSend);
         }
       } else {
         replyToGemini(feedbackText, [], shouldAutoSend);
@@ -1151,17 +1127,14 @@ async function handleCLIResponse(response) {
 // ==========================================
 function executeNextQueueTask() {
   if (activeTaskQueue.length === 0) {
-    const lastResponse =
-      queueResultsCollector[queueResultsCollector.length - 1];
+    const lastResponse = queueResultsCollector[queueResultsCollector.length - 1];
     const lastAutoSend = lastResponse ? lastResponse.autoSend : undefined;
     finishQueueExecution(lastAutoSend);
     return;
   }
 
   const currentTask = activeTaskQueue.shift();
-  logToTerminal(
-    `[队列调度] 启动子任务 [${currentTask.action}] ID: ${currentTask.id}`,
-  );
+  logToTerminal(`[队列调度] 启动子任务 [${currentTask.action}] ID: ${currentTask.id}`);
   handleInstructionFlow(currentTask);
 }
 
@@ -1194,6 +1167,9 @@ function finishQueueExecution(autoSend) {
   // 保存待粘贴的文件列表并重置队列缓存
   const filesToPaste = [...queueFilesToPaste];
 
+  // mark for one-shot auto-verify on the next AI idle turn
+  if (isAutoVerifyEnabled) pendingAutoVerify = true;
+
   isQueueModeActive = false;
   activeTaskQueue = [];
   queueResultsCollector = [];
@@ -1211,18 +1187,21 @@ function scanAndExecuteInstructions() {
 
   // 先同步加载当前 URL 对应会话下的已执行 ID 记录
   syncConvExecutedIds(() => {
-    const unprocessedBlocks = document.querySelectorAll(
-      "pre code:not([data-glab-processed])",
+    // 兼容 ChatGPT 无 <pre> 包裹的代码块（使用 Set 去重避免重复处理）
+    const unprocessedBlocks = Array.from(
+      new Set([
+        ...document.querySelectorAll("pre code:not([data-glab-processed])"),
+        ...document.querySelectorAll("code.language-glab-call:not([data-glab-processed])"),
+      ]),
     );
     if (unprocessedBlocks.length === 0) return;
 
     // 获取页面中所有的 GLAB 代码块，以便建立稳定的序号序列（保证页面刷新后历史任务 ID 映射的稳定性）
-    const allCodeBlocks = Array.from(document.querySelectorAll("pre code"));
+    const allCodeBlocks = Array.from(new Set([...document.querySelectorAll("pre code"), ...document.querySelectorAll("code.language-glab-call")]));
     const glabBlocks = allCodeBlocks.filter((codeEl) => {
       const text = codeEl.textContent.trim();
       const isGlabClass = codeEl.classList.contains("language-glab-call");
-      const hasInstructionKeywords =
-        text.includes('"action"') && text.includes('"params"');
+      const hasInstructionKeywords = text.includes('"action"') && text.includes('"params"');
       return isGlabClass || hasInstructionKeywords;
     });
 
@@ -1232,8 +1211,7 @@ function scanAndExecuteInstructions() {
     unprocessedBlocks.forEach((codeEl) => {
       const text = codeEl.textContent.trim();
       const isGlabClass = codeEl.classList.contains("language-glab-call");
-      const hasInstructionKeywords =
-        text.includes('"action"') && text.includes('"params"');
+      const hasInstructionKeywords = text.includes('"action"') && text.includes('"params"');
 
       if (isGlabClass || hasInstructionKeywords) {
         codeEl.setAttribute("data-glab-processed", "true");
@@ -1251,20 +1229,14 @@ function scanAndExecuteInstructions() {
                 task.id = uniqueId;
 
                 // 兼容性校验：检查 uniqueId 或原始 originalId 是否已执行过
-                const alreadyExecuted =
-                  currentConvExecutedIds.has(uniqueId) ||
-                  currentConvExecutedIds.has(originalId);
+                const alreadyExecuted = currentConvExecutedIds.has(uniqueId) || currentConvExecutedIds.has(originalId);
                 if (!alreadyExecuted) {
                   pendingTasks.push(task);
                 } else {
-                  logToTerminal(
-                    `提示：多任务子项 [${uniqueId}] 已执行过，自动忽略。`,
-                  );
+                  logToTerminal(`提示：多任务子项 [${uniqueId}] 已执行过，自动忽略。`);
                 }
               } else {
-                logToTerminal(
-                  "警告：多任务子项未包含有效 ID，安全起见拒绝执行。",
-                );
+                logToTerminal("警告：多任务子项未包含有效 ID，安全起见拒绝执行。");
               }
             });
           } else {
@@ -1279,21 +1251,18 @@ function scanAndExecuteInstructions() {
             parsed.id = uniqueId;
 
             // 兼容性校验：检查 uniqueId 或原始 originalId 是否已执行过
-            const alreadyExecuted =
-              currentConvExecutedIds.has(uniqueId) ||
-              currentConvExecutedIds.has(originalId);
+            const alreadyExecuted = currentConvExecutedIds.has(uniqueId) || currentConvExecutedIds.has(originalId);
             if (alreadyExecuted) {
-              logToTerminal(
-                `提示：指令 ID [${uniqueId}] 在当前对话中已执行过，已自动跳过。`,
-              );
+              logToTerminal(`提示：指令 ID [${uniqueId}] 在当前对话中已执行过，已自动跳过。`);
               return;
             }
             pendingTasks.push(parsed);
           }
         } catch (e) {
+          // 解析失败说明内容可能仍在流式输出中，移除标记让下次扫描重试
+          codeEl.removeAttribute("data-glab-processed");
           console.error("[GLAB] 指令 JSON 解析失败:", e);
-          updatePanelState("error", "指令解析错误");
-          logToTerminal(`指令 JSON 解析失败: ${e.message}`);
+          logToTerminal(`指令 JSON 解析失败（内容可能未输出完）: ${e.message}`);
         }
       }
     });
@@ -1319,9 +1288,7 @@ function scanAndExecuteInstructions() {
         activeTaskQueue = pendingTasks;
         queueFilesToPaste = [];
 
-        logToTerminal(
-          `启动多流程队列模式，共 [${activeTaskQueue.length}] 个任务待执行。`,
-        );
+        logToTerminal(`启动多流程队列模式，共 [${activeTaskQueue.length}] 个任务待执行。`);
 
         // 队列占用整体 1 个步骤深度
         autoRunDepth++;
@@ -1341,6 +1308,10 @@ function scanAndExecuteInstructions() {
         updateDepthCounter();
         updatePanelState("idle", "已就绪");
         logToTerminal("未发现新指令，步骤深度已重置。");
+        if (pendingAutoVerify) {
+          pendingAutoVerify = false;
+          triggerVerifyPrompt();
+        }
       }
     }
   });
@@ -1355,13 +1326,7 @@ function sendRequestToCLI(request) {
 }
 
 function handleInstructionFlow(request) {
-  const readOnlyActions = [
-    "list_dir",
-    "read_file",
-    "list_skills",
-    "load_skill",
-    "paste_file",
-  ];
+  const readOnlyActions = ["list_dir", "read_file", "list_skills", "load_skill", "paste_file", "relay_verify", "relay_result"];
 
   if (autoRunDepth >= 10) {
     updatePanelState("error", "步骤超限锁定");
@@ -1371,10 +1336,7 @@ function handleInstructionFlow(request) {
 
   // 检查是否是已被用户手动授权的后续分片（chunkIndex > 0 且路径已批准）
   const isApprovedChunk =
-    request.action === "write_file_chunk" &&
-    request.params &&
-    request.params.chunkIndex > 0 &&
-    approvedChunkPaths.has(request.params.path);
+    request.action === "write_file_chunk" && request.params && request.params.chunkIndex > 0 && approvedChunkPaths.has(request.params.path);
 
   if (readOnlyActions.includes(request.action)) {
     if (!isQueueModeActive) {
@@ -1390,13 +1352,8 @@ function handleInstructionFlow(request) {
         autoRunDepth++;
         updateDepthCounter();
       }
-      updatePanelState(
-        "executing",
-        isApprovedChunk ? "CLI 自动执行中 (分片追加)" : "CLI 自动执行中",
-      );
-      logToTerminal(
-        `自动投递 [写入${isApprovedChunk ? "分片" : ""}]: [${request.action}] ID: ${request.id}`,
-      );
+      updatePanelState("executing", isApprovedChunk ? "CLI 自动执行中 (分片追加)" : "CLI 自动执行中");
+      logToTerminal(`自动投递 [写入${isApprovedChunk ? "分片" : ""}]: [${request.action}] ID: ${request.id}`);
       sendRequestToCLI(request);
     } else {
       updatePanelState("pending", "等待授权确认");
@@ -1411,6 +1368,15 @@ function updateDepthCounter() {
   if (counter) {
     counter.innerText = `${autoRunDepth} / 10`;
   }
+}
+
+function triggerVerifyPrompt() {
+  const myRole = detectRole();
+  const targetRole = myRole === "gemini" ? "gpt" : "gemini";
+  const targetLabel = targetRole === "gpt" ? "ChatGPT" : "Gemini";
+  const verifyMsg = `请将你对用户最近一个问题的完整回答发往 ${targetLabel} 进行独立校验。请提取原始问题和你的结论，立刻输出 relay_verify 指令（不要额外解释）。`;
+  replyToGemini(verifyMsg, [], true);
+  logToTerminal(`校验触发提示已发送 → 目标: ${targetRole}`);
 }
 
 function showConfirmUI(request) {
@@ -1434,11 +1400,7 @@ function showConfirmUI(request) {
     logToTerminal(`用户已批准指令: ${request.id}`);
 
     // 如果是分片写入的第 0 片被批准，将路径记录到 approvedChunkPaths 中
-    if (
-      request.action === "write_file_chunk" &&
-      request.params &&
-      request.params.chunkIndex === 0
-    ) {
+    if (request.action === "write_file_chunk" && request.params && request.params.chunkIndex === 0) {
       approvedChunkPaths.add(request.params.path);
       logToTerminal(`分片写入被授权，路径已加入缓存: ${request.params.path}`);
     }
@@ -1525,13 +1487,17 @@ const observer = new MutationObserver(() => {
     !!document.querySelector('button[aria-label="停止生成"]') ||
     !!document.querySelector('button[aria-label="停止响应"]') ||
     !!document.querySelector('button[aria-label="Stop generating"]') ||
+    !!document.querySelector('button[aria-label="Stop streaming"]') ||
     !!document.querySelector('button[aria-label*="Stop"]') ||
     !!document.querySelector('button[aria-label*="停止"]');
 
   const hasLoading =
     !!document.querySelector(".loading-indicator") ||
     !!document.querySelector(".result-streaming") ||
-    !!document.querySelector('[aria-busy="true"]');
+    !!document.querySelector('[aria-busy="true"]') ||
+    !!document.querySelector('[data-state="streaming"]') ||
+    !!document.querySelector(".streaming") ||
+    !!document.querySelector('[data-is-streaming="true"]');
 
   const isCurrentlyGenerating = hasStopBtn || hasLoading;
 
@@ -1543,12 +1509,10 @@ const observer = new MutationObserver(() => {
     generateTimer = setTimeout(() => {
       if (isGenerating) {
         isGenerating = false;
-        console.log(
-          "[GLAB Timer] AI 流结束，触发 scanAndExecuteInstructions()",
-        );
+        console.log("[GLAB Timer] AI 流结束，触发 scanAndExecuteInstructions()");
         scanAndExecuteInstructions();
       }
-    }, 500);
+    }, 1000);
   }
 });
 
