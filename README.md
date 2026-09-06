@@ -1,14 +1,16 @@
-# Gemini & ChatGPT Local Agent Bridge (GLAB) 🚀
+# General Local Agent Bridge (GLAB) 🚀
 
-Gemini & ChatGPT Local Agent Bridge (GLAB) 是一个能够无缝桥接 **Gemini / ChatGPT 网页端对话框** 与 **本地操作系统环境** 的浏览器扩展与本地代理服务系统。它通过高度集成的注入式侧边抽屉面板和安全本地 WebSocket 代理，允许 Gemini / ChatGPT 直接安全地读取/写入你的项目代码、执行本地脚本 (Skills)、甚至通过模拟剪贴板粘贴多模态文件。
+General Local Agent Bridge (GLAB) 是一个能够桥接 **AI 网页端对话框** 与 **本地操作系统环境** 的浏览器扩展与本地代理服务系统。它通过高度集成的注入式侧边抽屉面板和安全本地 WebSocket 代理，当前适配 Gemini 和 ChatGPT，允许网页 AI 读取/写入你的项目代码、执行本地脚本 (Skills)、甚至通过模拟剪贴板粘贴多模态文件。
 
 
 ---
 
+通用名称采用 GLAB，现有 `glab-call` 协议、`GLAB_WORK_DIR` 环境变量和扩展配置键保持兼容。站点域名、DOM 选择器及 `gemini` / `gpt` 路由标识用于对应模型适配。
+
 ## 📂 项目结构
 
 ```text
-web-gemini-skill/
+glab/
 ├── extension/          # 浏览器扩展目录 (Chrome Extension MV3)
 │   ├── manifest.json   # 扩展配置文件
 │   ├── content.js      # 核心逻辑 (DOM 监听、仿真回填、多模态粘贴、自动发送等)
@@ -24,11 +26,11 @@ web-gemini-skill/
 
 ## ✨ 核心特性
 
-- 💎 **Glassmorphism 注入式控制面板**：无感深度集成在 Gemini 右下角的浮动抽屉，支持彩色呼吸灯状态提示、实时步骤深度计数器、写操作双栏 Diff 预览及终端日志流。
+- 💎 **Glassmorphism 注入式控制面板**：无感深度集成在聊天页面右下角的浮动抽屉，支持彩色呼吸灯状态提示、实时步骤深度计数器、写操作双栏 Diff 预览及终端日志流。
 - 🔒 **Path Jail 安全沙箱隔离**：本地 CLI 服务端启动时必须显式绑定工作根目录，拒绝一切越权访问及相对路径逃逸（如 `../` 越权读取）。
-- 📂 **多模态文件粘贴模拟**：接收本地文件的 Base64 编码，在浏览器端还原为原生的 `Blob` 与 `File` 容器，通过构建 `DataTransfer` 并派发 `ClipboardEvent('paste')` 粘贴事件，完美模拟真实剪贴板，使 Gemini 具备本地文件的多模态理解与解析能力。
+- 📂 **多模态文件粘贴模拟**：接收本地文件的 Base64 编码，在浏览器端还原为原生的 `Blob` 与 `File` 容器，通过构建 `DataTransfer` 并派发 `ClipboardEvent('paste')` 粘贴事件，完美模拟真实剪贴板，使网页 AI 具备本地文件的多模态理解与解析能力。
 - ⛓️ **多步骤队列与汇总反馈**：支持在单次请求中投递多项连续的指令，自动串行执行，并在全部执行结束后统一回填汇总信息，防止单个子任务直接截断流程。
-- ⚙️ **无状态 `autoSend` 控制参数**：支持通过 JSON 指令内可选的 `autoSend` 控制是否在回填文本及粘贴完文件后自动发送至 Gemini 页面。若为 `false`，则自动挂起并等待用户手动审核。
+- ⚙️ **无状态 `autoSend` 控制参数**：支持通过 JSON 指令内可选的 `autoSend` 控制是否在回填文本及粘贴完文件后自动发送至当前聊天页面。若为 `false`，则自动挂起并等待用户手动审核。
 - 🔄 **强健的回填与发送重试机制**：
   - **输入兜底**：使用 `execCommand('insertHTML')` 写入并触发 React 状态绑定事件。若因焦点丢失写入失效，会自动触发 DOM `innerHTML` 直接改写作为强力兜底。
   - **轮询重试**：针对 SPA 页面重绘导致发送按钮延迟启用的情况，采用 200ms 的轮询重试机制（最高 10 次，共 2 秒），确保 100% 成功点击发送，并在成功后自动重置深度步骤计数器。
@@ -54,13 +56,13 @@ npm install
 node server.js
 ```
 > [!NOTE]
-> 如果启动时未通过 `--skills-dir` 参数指定，CLI 会自动在用户主目录下初始化并创建 `~/.web-gemini-skill` 作为默认技能目录。
+> 新安装默认使用 `~/.glab-skills`。若新目录不存在而旧目录 `~/.web-gemini-skill` 已存在，则继续使用旧目录，不自动搬迁文件。插件保存的 Skills 路径优先于 CLI 默认值，`--skills-dir=/绝对路径` 可指定 CLI 默认目录。
 
 ### 3. 初始化连接与运行
-1. 打开 [Gemini Chat](https://gemini.google.com/)。
+1. 打开 [Gemini](https://gemini.google.com/) 或 [ChatGPT](https://chatgpt.com/)。
 2. 你将会在页面右下角发现一个 **🤖 机器人悬浮球**。即使你从未设置过本地路径，插件启动时也会自动连接至本地 CLI 服务。
 3. 点击悬浮球展出抽屉面板，直接点击工作根目录旁的 **[📂 选择]** 按钮，CLI 将唤起系统原生文件选择器。选择你想要授权操作的本地项目根目录，然后点击 **[保存配置]**。
-4. 保存后双端会自动完成目录锁定的安全握手校验。此时点击 **[🚀 初始化对话规则]**，页面输入框会自动回填初始化 Rules Prompt 并发送，以教导 Gemini 了解可用的本地指令格式。
+4. 保存后双端会自动完成目录锁定的安全握手校验。此时点击 **[🚀 初始化对话规则]**，页面输入框会自动回填初始化 Rules Prompt 并发送，让当前 AI 了解可用的本地指令格式。
 
 ---
 

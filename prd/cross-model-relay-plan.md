@@ -73,7 +73,7 @@ Gemini 执行 read_file  →  实际访问 project-b          ← 错误
 ┌─────────────────────────────────────────────────────┐       │
 │  Tab B (Verifier: GPT)   ◄────────────────────────── ┼──────┘
 │         收到 relay_incoming                           │
-│         replyToGemini() 填入结构化校验提示            │
+│         replyToChat() 填入结构化校验提示            │
 │         AI 审查并输出 verdict + relay_result glab-call│
 │         content.js 拦截 relay_result ─────────────────┼──► CLI
 │                                                      │       │
@@ -82,7 +82,7 @@ Gemini 执行 read_file  →  实际访问 project-b          ← 错误
 ┌─────────────────────────────────────────────────────┐       │
 │  Tab A (Proposer)  ◄──────────────────────────────── ┼──────┘
 │         收到 relay_incoming (verdict)                 │
-│         replyToGemini() 展示校验结论给用户            │
+│         replyToChat() 展示校验结论给用户            │
 │         AI 可选择接受建议并修正，或标记任务完成        │
 └─────────────────────────────────────────────────────┘
 ```
@@ -300,7 +300,7 @@ socket.send(JSON.stringify({
 ```javascript
 if (response.action === 'relay_incoming') {
   logToTerminal(`收到来自 [${response.from}] 的中转消息，自动填入输入框...`);
-  replyToGemini(response.payload, [], response.autoSend !== false);
+  replyToChat(response.payload, [], response.autoSend !== false);
   return;
 }
 ```

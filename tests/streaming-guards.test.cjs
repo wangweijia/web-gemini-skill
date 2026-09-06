@@ -55,7 +55,7 @@ test('completion requires stable reply text', () => {
 test('incoming feedback waits without touching the editor while generating', () => {
   const h = harness();
   h.document.querySelector = () => ({});
-  vm.runInContext('replyToGemini("feedback")', h.context);
+  vm.runInContext('replyToChat("feedback")', h.context);
   assert.equal(h.timers.length, 1);
 });
 
@@ -75,7 +75,7 @@ test('scan queries only latest assistant reply for pending commands', () => {
 test('switching conversations cancels delayed feedback', () => {
   const h = harness();
   h.document.querySelector = () => ({});
-  vm.runInContext('replyToGemini("feedback")', h.context);
+  vm.runInContext('replyToChat("feedback")', h.context);
   h.context.window.location.pathname = '/c/def';
   h.timers.pop()();
   assert.equal(h.timers.length, 0);
@@ -94,7 +94,7 @@ test('switching conversations cancels delayed feedback', () => {
   };
   h.context.findInputElement = () => input;
   h.context.findSendButton = () => button;
-  vm.runInContext('replyToGemini("feedback")', h.context);
+  vm.runInContext('replyToChat("feedback")', h.context);
   h.timers.pop()();
   h.intervals[0]();
   label = 'Send message';
@@ -162,4 +162,17 @@ test('prepare_skill is read-only while install_skill requires approval with Auto
   vm.runInContext('handleInstructionFlow({id:"prepare", action:"prepare_skill", params:{name:"demo"}}); handleInstructionFlow({id:"install", action:"install_skill", params:{name:"demo"}});', h.context);
   assert.deepEqual(Array.from(h.context.sent), ['prepare_skill']);
   assert.deepEqual(Array.from(h.context.approvals), ['install_skill']);
+});
+
+test('generic naming retains model-specific role and response selection', () => {
+  const h = harness();
+  let selected;
+  h.document.querySelectorAll = selector => { selected = selector; return []; };
+  assert.equal(vm.runInContext('detectRole()', h.context), 'gpt');
+  vm.runInContext('getLatestAssistantReply()', h.context);
+  assert.equal(selected, '[data-message-author-role="assistant"]');
+  h.context.location.hostname = 'gemini.google.com';
+  assert.equal(vm.runInContext('detectRole()', h.context), 'gemini');
+  vm.runInContext('getLatestAssistantReply()', h.context);
+  assert.equal(selected, 'model-response');
 });

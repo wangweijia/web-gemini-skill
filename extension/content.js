@@ -1,5 +1,5 @@
 // ==========================================
-// Gemini Local Agent Bridge (GLAB) Content Script
+// General Local Agent Bridge (GLAB) Content Script
 // ==========================================
 
 let socket = null;
@@ -148,7 +148,7 @@ function injectGLABPanel() {
     <div class="glab-header">
       <div class="glab-title-group">
         <span class="glab-logo">⚡</span>
-        <h3>GLAB Agent Bridge</h3>
+        <h3>GLAB · 通用本地代理</h3>
       </div>
       <button id="glab-close-drawer" title="收起面板">✕</button>
     </div>
@@ -644,7 +644,7 @@ function injectGLABPanel() {
       logToTerminal("请等待输出结束后再反馈中断。");
       return;
     }
-    replyToGemini("【GLAB 用户反馈】上一条命令输出可能被截断、消失或格式无效。请检查已有执行反馈，不要假定未收到成功反馈的操作已经完成，也不要盲目重跑有副作用的命令。普通短指令仍可批量发送。但对于一个过长命令拆出的各块，必须线性分轮：本轮只输出当前块，结束回复，等它执行成功后才生成并运行下一块，禁止一次输出该长命令的多个分块。文件 content 使用 write_file_chunk，每片缩短至之前的一半（最多 1000 字符且最多 20 行）。如果需要改变已有分片内容或总数，请用新的 transferId，从第 0 片重新发送整个文件；该长命令的后续分块必须等待当前块执行成功后再生成。", [], true);
+    replyToChat("【GLAB 用户反馈】上一条命令输出可能被截断、消失或格式无效。请检查已有执行反馈，不要假定未收到成功反馈的操作已经完成，也不要盲目重跑有副作用的命令。普通短指令仍可批量发送。但对于一个过长命令拆出的各块，必须线性分轮：本轮只输出当前块，结束回复，等它执行成功后才生成并运行下一块，禁止一次输出该长命令的多个分块。文件 content 使用 write_file_chunk，每片缩短至之前的一半（最多 1000 字符且最多 20 行）。如果需要改变已有分片内容或总数，请用新的 transferId，从第 0 片重新发送整个文件；该长命令的后续分块必须等待当前块执行成功后再生成。", [], true);
   });
 
   document.getElementById("glab-verify-btn").addEventListener("click", () => {
@@ -705,7 +705,7 @@ function injectGLABPanel() {
         return;
       }
       const prompt = generateInitPrompt(res.workDir, res.skillsDir);
-      replyToGemini(prompt);
+      replyToChat(prompt);
       drawer.classList.remove("open");
     });
   });
@@ -859,7 +859,7 @@ function connectSocket() {
 
       if (response.action === "relay_incoming") {
         logToTerminal(`收到来自 [${response.from}] 的中转消息，正在回填...`);
-        replyToGemini(response.payload, [], response.autoSend !== false);
+        replyToChat(response.payload, [], response.autoSend !== false);
         return;
       }
 
@@ -937,7 +937,7 @@ function findSendButton() {
 }
 
 // 模拟回填并自动发送，支持携带待粘贴的文件列表与是否自动发送标记
-function replyToGemini(text, filesToPaste = [], autoSend = true, conversationId = getConversationId(), deadline = Date.now() + 120000) {
+function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = getConversationId(), deadline = Date.now() + 120000) {
   if (getConversationId() !== conversationId) {
     logToTerminal("对话已切换，取消旧对话的回填。");
     return;
@@ -947,12 +947,12 @@ function replyToGemini(text, filesToPaste = [], autoSend = true, conversationId 
       logToTerminal("等待生成结束超时，已取消回填。");
       return;
     }
-    setTimeout(() => replyToGemini(text, filesToPaste, autoSend, conversationId, deadline), 500);
+    setTimeout(() => replyToChat(text, filesToPaste, autoSend, conversationId, deadline), 500);
     return;
   }
   const inputEl = findInputElement();
   if (!inputEl) {
-    logToTerminal("错误：未找到对话输入框（Gemini/ChatGPT），无法回填！");
+    logToTerminal("错误：未找到当前聊天页面的输入框，无法回填！");
     updatePanelState("error", "未找到输入框");
     return;
   }
@@ -1126,17 +1126,17 @@ async function handleCLIResponse(response) {
       if (action === "paste_file" && data) {
         try {
           const file = await base64ToFile(data.base64Data, data.mimeType, data.filename);
-          replyToGemini(feedbackText, [file], shouldAutoSend);
+          replyToChat(feedbackText, [file], shouldAutoSend);
         } catch (e) {
           logToTerminal(`文件解码失败: ${e.message}`);
-          replyToGemini(feedbackText + `\n解码失败: ${e.message}`, [], shouldAutoSend);
+          replyToChat(feedbackText + `\n解码失败: ${e.message}`, [], shouldAutoSend);
         }
       } else {
-        replyToGemini(feedbackText, [], shouldAutoSend);
+        replyToChat(feedbackText, [], shouldAutoSend);
       }
     } else {
       feedbackText += `执行状态: 失败\n原因: ${error}`;
-      replyToGemini(feedbackText, [], shouldAutoSend);
+      replyToChat(feedbackText, [], shouldAutoSend);
     }
   }
 }
@@ -1195,7 +1195,7 @@ function finishQueueExecution(autoSend) {
   queueFilesToPaste = [];
 
   const shouldAutoSend = autoSend !== false && autoSend !== "false";
-  replyToGemini(feedbackText, filesToPaste, shouldAutoSend);
+  replyToChat(feedbackText, filesToPaste, shouldAutoSend);
 }
 
 // ==========================================
@@ -1416,7 +1416,7 @@ function triggerVerifyPrompt() {
   const targetRole = myRole === "gemini" ? "gpt" : "gemini";
   const targetLabel = targetRole === "gpt" ? "ChatGPT" : "Gemini";
   const verifyMsg = `请将你对用户最近一个问题的完整回答发往 ${targetLabel} 进行独立校验。请提取原始问题和你的结论，立刻输出 relay_verify 指令（不要额外解释）。`;
-  replyToGemini(verifyMsg, [], true);
+  replyToChat(verifyMsg, [], true);
   logToTerminal(`校验触发提示已发送 → 目标: ${targetRole}`);
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "glab-cli",
   "version": "1.0.0",
-  "description": "Gemini Local Agent Bridge (GLAB) 本地代理服务",
+  "description": "General Local Agent Bridge (GLAB) 本地代理服务",
   "main": "server.js",
   "dependencies": {
     "ws": "^8.16.0"

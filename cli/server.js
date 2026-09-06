@@ -22,7 +22,7 @@ const { exec } = require("child_process");
 
 const os = require("os");
 
-const defaultSkillsDir = args["skills-dir"] ? path.resolve(args["skills-dir"]) : path.join(os.homedir(), ".web-gemini-skill");
+const defaultSkillsDir = require("./skills-directory").resolveDefaultSkillsDir(os.homedir(), args["skills-dir"]);
 
 // 初始化/创建 Skills 默认目录
 if (!fs.existsSync(defaultSkillsDir)) {

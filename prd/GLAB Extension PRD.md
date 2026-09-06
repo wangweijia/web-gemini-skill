@@ -1,8 +1,8 @@
-# **Gemini Local Agent Bridge (GLAB) 技术规约与指令协议设计文档**
+# **General Local Agent Bridge (GLAB) 技术规约与指令协议设计文档**
 
 ## **1. 系统架构与通信流向**
 
-本系统由 **Gemini Web 页面 (Content Script & 注入式侧边栏/浮窗 UI)**、**本地 CLI 服务 (WebSocket Server)** 两部分构成。放弃容易失去焦点的右上角 Popup 模式与割裂的 Chrome 官方 Side Panel，采用**“高度一体化的网页注入式浮动面板（Injected Glassmorphism Panel）”**作为交互控制中心。
+本系统由 **AI 聊天页面 (Content Script & 注入式侧边栏/浮窗 UI)**、**本地 CLI 服务 (WebSocket Server)** 两部分构成。放弃容易失去焦点的右上角 Popup 模式与割裂的 Chrome 官方 Side Panel，采用**“高度一体化的网页注入式浮动面板（Injected Glassmorphism Panel）”**作为交互控制中心。
 
 ### **1.1 系统架构拓扑**
 
@@ -11,7 +11,7 @@
    |                     用户浏览器 (Chrome)                     |
    |                                                            |
    |  +------------------------------------------------------+  |
-   |  |                  Gemini Web Page                     |  |
+   |  |                  AI Chat Page                     |  |
    |  |                                                      |  |
    |  |  [ 输入框 / 聊天历史 DOM ]                             |  |
    |  |          ^                                           |  |
@@ -50,7 +50,7 @@
 sequenceDiagram
     autonumber
     actor User as 用户
-    participant Gemini as Gemini Web Page
+    participant Chat as AI Chat Page
     participant Plugin as GLAB Content Script
     participant UI as Injected Panel UI
     participant CLI as GLAB Local CLI (WS)
@@ -59,11 +59,11 @@ sequenceDiagram
     UI->>UI: 展开路径配置窗口
     User->>UI: 填入工作根目录与 Skills 目录，点击保存
     UI->>Plugin: 写入 chrome.storage.local (workDir, skillsDir)
-    Plugin->>Gemini: 自动利用 execCommand 写入初始化 Prompt 并发送
-    Gemini->>User: 确认规则并等待指令
+    Plugin->>Chat: 自动利用 execCommand 写入初始化 Prompt 并发送
+    Chat->>User: 确认规则并等待指令
 
-    User->>Gemini: 输入任务 (如 "读取本地 src 目录")
-    Gemini->>Plugin: 流式输出包含 ```glab-call 代码块的指令
+    User->>Chat: 输入任务 (如 "读取本地 src 目录")
+    Chat->>Plugin: 流式输出包含 ```glab-call 代码块的指令
     Plugin->>UI: 页面右下角指示器呈 🔵 蓝光闪烁 (正在解析...)
     
     Plugin->>Plugin: 检测到流式结束，解析并捕获 JSON 指令
@@ -84,7 +84,7 @@ sequenceDiagram
 
     alt 自动反馈计数未超限 (autoRunDepth < 10)
         Plugin->>UI: 状态切换为 🔄 绿色循环动画 (结果回传中...)
-        Plugin->>Gemini: 回填执行结论并自动点击发送，启动下一轮 AI 决策
+        Plugin->>Chat: 回填执行结论并自动点击发送，启动下一轮 AI 决策
     else 反馈计数已超限 (安全防御触发)
         Plugin->>UI: 状态切换为 🔴 锁定红灯，提示“已达到最大连续执行深度，请手动接管”
     end
@@ -94,7 +94,7 @@ sequenceDiagram
 
 ## **2. 指令控制协议规范 (Control Protocol)**
 
-所有由 Gemini 发出、需要本地 CLI 执行的操作，必须严格使用 Markdown 代码块包裹，指定语言标识符为 `glab-call`。其内部为标准 JSON 格式。
+所有由网页 AI 发出、需要本地 CLI 执行的操作，必须严格使用 Markdown 代码块包裹，指定语言标识符为 `glab-call`。其内部为标准 JSON 格式。
 
 ### **2.1 指令基本 JSON 格式**
 ```glab-call
@@ -251,7 +251,7 @@ sequenceDiagram
   ```
 
 #### **9. 粘贴本地文件 (`paste_file`)**
-* **用途**：读取工作区指定相对路径的文件，并将其通过模拟剪贴板粘贴事件（Clipboard Event）粘贴到 Gemini 的网页输入框中（通常用于发送图片、大日志、PDF等以触发 Gemini 的多模态理解与解析能力）。
+* **用途**：读取工作区指定相对路径的文件，并将其通过模拟剪贴板粘贴事件（Clipboard Event）粘贴到 当前聊天页面的输入框中（通常用于发送图片、大日志、PDF等以触发 网页 AI 的多模态理解与解析能力）。
 * **参数**：
   * `path` (string, 必填): 本地文件相对路径。
 * **输入示例**：
@@ -390,7 +390,7 @@ sequenceDiagram
      * 若关闭 **Auto-run 开关**，注入式面板自动弹出，进入黄光闪烁等待态，要求用户点击 `[✔️ 批准执行]`。
 2. **步骤深度安全限制 (Run Limit)**：
    * 插件在单次任务流转中维护一个 `autoRunDepth` 变量。
-   * 每次自动发送回填数据给 Gemini 时，`autoRunDepth++`。
+   * 每次自动发送回填数据给网页 AI 时，`autoRunDepth++`。
    * 一旦 `autoRunDepth >= 10`，直接切断自动流程，悬浮球变更为 🔴 锁定红灯，停止回填，并在面板提示“已达到最大连续执行深度，请检查 AI 是否陷入死循环，点击按钮可手动接管继续”。
    * 当用户在输入框手动键入并发送新消息时，`autoRunDepth` 清零，重新开始计数。
 
@@ -399,8 +399,8 @@ sequenceDiagram
    * 支持批量任务队列（即 JSON 数组的 `glab-call`）。当队列中包含 `paste_file` 指令时，插件会自动将本地 CLI 返回的 Base64 文件内容解析还原为原生的 `Blob` 和 `File` 容器，并推入临时的待粘贴文件缓存队列 `queueFilesToPaste` 中。
    * 中途仅收集结果不回填，待队列内所有任务执行完毕后触发 `finishQueueExecution` 统一编译汇总文本。
 2. **多模态文件粘贴模拟**：
-   * 采用 `ClipboardEvent('paste')` 与 `DataTransfer` 模拟机制。将 File 包装后，分发原生事件塞入 Gemini 输入框。
-   * 为保持 Gemini 页面输入框的可读性与简洁性，在生成 `feedbackText` 时，插件会自动将返回数据中的大体积二进制 `base64Data` 串截断，替换为概括提示标签（例如 `[Base64 Data: ... chars, automatically hidden in text prompt]`），避免二进制码污染输入框。
+   * 采用 `ClipboardEvent('paste')` 与 `DataTransfer` 模拟机制。将 File 包装后，分发原生事件塞入 当前聊天输入框。
+   * 为保持 当前聊天页面输入框的可读性与简洁性，在生成 `feedbackText` 时，插件会自动将返回数据中的大体积二进制 `base64Data` 串截断，替换为概括提示标签（例如 `[Base64 Data: ... chars, automatically hidden in text prompt]`），避免二进制码污染输入框。
 3. **指令控制的 `autoSend` 控制与无状态设计**：
    * 指令支持可选参数 `"autoSend": true | false`（默认 `true`），直接发送给 CLI。CLI 会在执行完毕后，将该参数回传给插件。
    * 若 `autoSend` 为 `false`，回填文件与日志后流程挂起，悬浮球恢复 `Idle` 态并展示“已就绪”并说明“回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...”，留给用户二次编辑与人工审阅的机会；若为 `true`，则直接执行自动发送逻辑。
@@ -540,21 +540,22 @@ case 'run_skill': {
 ```json
 {
   "manifest_version": 3,
-  "name": "Gemini Local Agent Bridge (GLAB)",
+  "name": "General Local Agent Bridge (GLAB)",
   "version": "2.2",
   "permissions": [
     "activeTab",
     "storage"
   ],
   "host_permissions": [
-    "https://gemini.google.com/*"
+    "https://gemini.google.com/*",
+    "https://chatgpt.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://gemini.google.com/*"],
+      "matches": ["https://gemini.google.com/*", "https://chatgpt.com/*"],
       "js": ["content.js"],
       "run_at": "document_end"
     }
@@ -716,7 +717,7 @@ function connectSocket() {
   };
 }
 
-function replyToGemini(text) {
+function replyToChat(text) {
   const inputEl = document.querySelector('div[contenteditable="true"][role="textbox"]');
   if (!inputEl) return;
   
@@ -749,7 +750,7 @@ function handleCLIResponse(response) {
     feedbackText += `执行状态: 失败\n原因: ${error}`;
   }
 
-  replyToGemini(feedbackText);
+  replyToChat(feedbackText);
 }
 
 function scanAndExecuteInstructions() {
@@ -1136,7 +1137,7 @@ ${skillsDir}/
 | `outputType` | string | ❌ | 输出类型：`markdown` / `json` / `text`，控制侧边栏渲染方式 |
 
 ### **6.3 `SKILL.md` 格式规约**
-`SKILL.md` 是供 Gemini 通过 `load_skill` 读取后理解如何使用该 Skill 的详细文档：
+`SKILL.md` 是供网页 AI 通过 `load_skill` 读取后理解如何使用该 Skill 的详细文档：
 ````markdown
 # [Skill Name]
 
@@ -1168,5 +1169,5 @@ ${skillsDir}/
 ### **6.4 Skill 通信约定**
 * Skill 入口脚本通过 `process.argv` 读取 CLI 传入的 `--key value` 格式参数。
 * Skill 若需要访问工作根目录，通过读取环境变量 `process.env.GLAB_WORK_DIR` 获取，不得硬编码路径。
-* Skill 的标准输出（`stdout`）内容将被 CLI 收集并回传给插件，作为最终展示或反馈给 Gemini 的数据源。
+* Skill 的标准输出（`stdout`）内容将被 CLI 收集并回传给插件，作为最终展示或反馈给网页 AI 的数据源。
 * Skill 执行失败时，应将错误信息输出到 `stderr` 并以非零退出码（`process.exit(1)`）退出，CLI 将其识别为 `status: "error"`。

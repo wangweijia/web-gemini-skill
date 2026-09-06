@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Gemini & ChatGPT Local Agent Bridge (GLAB)",
+  "name": "General Local Agent Bridge (GLAB)",
   "version": "2.3",
-  "description": "连接 Web 端 Gemini / ChatGPT 与本地开发环境的安全 Agent 协同桥梁",
+  "description": "连接 AI 网页聊天与本地开发环境的通用 Agent 桥梁，支持 Gemini 与 ChatGPT",
   "permissions": [
     "activeTab",
     "storage"
