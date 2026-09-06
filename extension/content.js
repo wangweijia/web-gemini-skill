@@ -204,6 +204,9 @@ function injectGLABPanel() {
           </div>
           <div class="action-buttons" style="margin-top: 4px;">
             <button id="glab-verify-btn" class="glab-btn verify" disabled>🔍 发送校验</button>
+            <button id="glab-report-output-btn" class="glab-btn primary">反馈输出中断</button>
+          </div>
+          <div id="glab-output-error" role="status" style="display: none; margin-top: 8px;">指令不完整或格式无效，本次扫描未执行指令。可点击“反馈输出中断”让 AI 缩短后重试。
           </div>
         </div>
       </div>
@@ -636,6 +639,14 @@ function injectGLABPanel() {
     logToTerminal(`Auto-verify 模式已${isAutoVerifyEnabled ? "开启，队列执行完成后将自动触发校验" : "关闭"}`);
   });
 
+  document.getElementById("glab-report-output-btn").addEventListener("click", () => {
+    if (isPageGenerating() || isGenerating) {
+      logToTerminal("请等待输出结束后再反馈中断。");
+      return;
+    }
+    replyToGemini("【GLAB 用户反馈】上一条命令输出可能被截断、消失或格式无效。请检查已有执行反馈，不要假定未收到成功反馈的操作已经完成，也不要盲目重跑有副作用的命令。普通短指令仍可批量发送。但对于一个过长命令拆出的各块，必须线性分轮：本轮只输出当前块，结束回复，等它执行成功后才生成并运行下一块，禁止一次输出该长命令的多个分块。文件 content 使用 write_file_chunk，每片缩短至之前的一半（最多 1000 字符且最多 20 行）。如果需要改变已有分片内容或总数，请用新的 transferId，从第 0 片重新发送整个文件；该长命令的后续分块必须等待当前块执行成功后再生成。", [], true);
+  });
+
   document.getElementById("glab-verify-btn").addEventListener("click", () => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       logToTerminal("错误：WebSocket 未连接，无法触发校验");
@@ -730,16 +741,14 @@ function generateInitPrompt(workDir, skillsDir) {
     prompt += `   你应先 list_skills 了解有哪些可用技能，再决定是否加载和运行。\n\n`;
   }
 
-  prompt += `3. **指令与任务队列格式**：当需要操作本地文件或运行 Skill 时，必须严格使用如下 \`\`\`glab-call 代码块格式输出。每个指令对象中可以包含可选的 \`autoSend\` 参数（布尔值，默认 \`true\`）。如果设为 \`false\`，指令执行完毕回填后**不会**自动提交，方便你等待用户手动输入或确认；如果设为 \`true\`，回填后会自动发送。你可以选择以下两种方式之一：\n\n`;
-  prompt += `   **A. 单步执行指令**（单条 JSON 对象）：\n`;
-  prompt += `   \`\`\`glab-call\n   {\n     "id": "唯一ID",\n     "action": "list_dir | read_file | write_file | write_file_chunk | update_file | run_code | run_command | paste_file | list_skills | load_skill | run_skill",\n     "params": { ... },\n     "autoSend": true\n   }\n   \`\`\`\n\n`;
-  prompt += `   **B. 多步骤任务队列**（推荐！当任务需要多步才能完成时，例如先读目录再读文件，或同时修改/创建多个文件，你可以打包成 JSON 数组在单个代码块中发出，或者输出多个独立的 glab-call 代码块。它们会依次串行执行并统一汇总结果）：\n`;
-  prompt += `   \`\`\`glab-call\n   [\n     {\n       "id": "唯一ID1",\n       "action": "<操作名1>",\n       "params": { ... }\n     },\n     {\n       "id": "唯一ID2",\n       "action": "<操作名2>",\n       "params": { ... },\n       "autoSend": false\n     }\n   ]\n   \`\`\`\n\n`;
+  prompt += `3. **指令与任务队列**：允许单条 JSON 对象、JSON 数组或多个 glab-call 代码块。多条指令会按顺序串行执行并汇总反馈；普通短指令不限制数量，按内容长度决定是否分批；但一个过长命令拆出的各块必须遵守下面的线性分轮规则。依赖前一步返回值的指令应等待反馈再生成；一批指令输出完后停止，等待执行结果再继续。autoSend 默认为 true，设为 false 时等待用户手动发送反馈。单条格式：\n`;
+  prompt += '\n```glab-call\n{"id":"唯一ID","action":"list_dir","params":{"path":"."},"autoSend":true}\n```\n\n';
+  prompt += '多指令示例：\n```glab-call\n[{"id":"read_a","action":"read_file","params":{"path":"a.txt"}},{"id":"read_b","action":"read_file","params":{"path":"b.txt"},"autoSend":true}]\n```\n\n';
   prompt += `**可用操作速查表**：\n`;
   prompt += `- \`list_dir\`：列目录。params: { "path": "..." }\n`;
   prompt += `- \`read_file\`：读文件. params: { "path": "..." }\n`;
-  prompt += `- \`write_file\`：新建文件（若已存在则报错）。params: { "path": "...", "content": "..." }\n`;
-  prompt += `- \`write_file_chunk\`：分批次写入文件（适用于内容过长即 >4KB 或 >80 行的情形）。你需要按 \`chunkIndex\` 从 0 到 \`totalChunks - 1\` 的顺序依次发送。params: { "path": "...", "chunkIndex": 0, "totalChunks": 3, "content": "当前分片文本内容" }\n`;
+  prompt += `- \`write_file\`：新建或覆盖文件。params: { "path": "...", "content": "..." }\n`;
+  prompt += '- `write_file_chunk`：长文件分轮写入。params: { "path": "...", "transferId": "本次完整写入的唯一ID", "chunkIndex": 0, "totalChunks": 3, "content": "当前分片文本" }。每片最多 2000 字符且最多 40 行；同一次写入的 path、transferId、totalChunks 保持不变，编号从 0 开始。\n';
   prompt += `- \`update_file\` (覆盖)：整体覆盖写入。params: { "path": "...", "mode": "overwrite", "content": "完整新内容" }\n`;
   prompt += `- \`update_file\` (补丁)：局部替换。params: { "path": "...", "mode": "patch", "patches": [{ "find": "原文", "replace": "新文" }] }\n`;
   prompt += `- \`run_code\`：执行代码片段. params: { "code": "..." }\n`;
@@ -751,8 +760,8 @@ function generateInitPrompt(workDir, skillsDir) {
   prompt += `- \`relay_verify\`：将当前任务的问题、操作摘要和结论发送至另一个 AI 进行独立校验。params: { "target": "gpt"|"gemini", "question": "...", "actions_summary": "...", "conclusion": "...", "execution_log": [] (可选) }\n`;
   prompt += `- \`relay_result\`：（由校验方使用）将校验结论发回给提案方。params: { "target": "gemini"|"gpt", "verdict": "PASS|WARN|FAIL", "confidence": 0-100, "issues": [], "suggestion": "..." }\n`;
   prompt += `\n6. **跨模型校验规则**：当你完成一项重要任务后，如果需要确保结论的准确性，可以主动输出 \`relay_verify\` 指令将问题与结论发往另一个 AI 校验。校验结果返回后，你可以根据 verdict 决定是否需要修正方案。\n\n`;
-  prompt += `\n4. **长文本写入策略**：当你需要新建或覆盖写入的文件内容大于 4KB 或 80 行时，**请务必不要**直接使用 \`write_file\` 或 \`update_file (overwrite)\` 一次性输出，因为这容易在前端触发 Markdown 渲染错误（如渲染成 Canvas）或因超出最大输出 token 而被中途截断。你必须主动选择 \`write_file_chunk\` 将内容按顺序拆分为数个分片进行分批次写入。每个分片内容应控制在 4KB / 80 行以内。\n\n`;
-  prompt += `5. **等待反馈**：每次输出 \`\`\`glab-call 指令（或指令列表）后，停止继续输出，等待我将本地执行结果（若为多步骤，则是汇总结果）回传给你，再根据执行结论继续完成后续任务。\n\n`;
+  prompt += `\n4. **过长命令必须线性分轮**：当一个命令代码块过长时，把它拆成多个可顺序执行的短 glab-call 代码块，并跨回复逐块完成：生成当前块 → 结束回复 → GLAB 执行 → 收到成功反馈 → 才生成下一块。禁止在同一回答中输出该长命令的多个分块，也禁止把它们打包成数组；这条限制只针对过长命令的拆分，不禁止普通短指令批量执行。对于 write_file 或 update_file(overwrite)，content 超过 2000 字符或 40 行时使用 write_file_chunk，每片同时满足这两个上限。先规划 totalChunks，保持 path、transferId 和 totalChunks 一致；每轮只生成该文件当前的一片，设 autoSend: true，等成功反馈中的 nextChunkIndex 再生成下一片。长脚本应先按此方式分片写入文件，全部写入成功后再单独执行，不要把 Shell 语法或 JSON 从中间截断成无法运行的命令。全部分片到齐才会替换目标文件，中途不要读取或运行未完成的新文件。普通短指令批次的完整 JSON 合计建议控制在约 6000 字符以内；这是保守输出预算，不是平台精确上限，超过时也要分轮等待反馈。\n`;
+  prompt += `5. **中断恢复**：若用户报告输出截断、消失或 JSON 无效，将后续每片长度减半。不要假定失败指令已执行。相同 transferId 和 chunkIndex 仅允许重发完全相同的内容；如需调整分片长度、内容或总数，使用新的 transferId，从第 0 片重新发送整个文件。CLI 重启后也应重新开始。收到 complete: true 才表示文件写入完成。\n\n`;
   prompt += `已准备就绪，工作目录已锁定为：${workDir}${skillsDir ? `，Skills 目录为：${skillsDir}` : ""}`;
   return prompt;
 }
@@ -832,7 +841,7 @@ function connectSocket() {
 
             // 【核心安全保护】只有握手锁定成功后，才挂载 Observer 开始监听页面消息
             observer.disconnect(); // 防止重复观察
-            observer.observe(document.body, { childList: true, subtree: true });
+            observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-state", "data-is-streaming", "aria-busy", "data-testid", "aria-label", "class"] });
             logToTerminal("网页消息监听（Observer）已成功激活工作。");
           } else {
             document.getElementById("glab-init-prompt-btn").disabled = true;
@@ -925,7 +934,19 @@ function findSendButton() {
 }
 
 // 模拟回填并自动发送，支持携带待粘贴的文件列表与是否自动发送标记
-function replyToGemini(text, filesToPaste = [], autoSend = true) {
+function replyToGemini(text, filesToPaste = [], autoSend = true, conversationId = getConversationId(), deadline = Date.now() + 120000) {
+  if (getConversationId() !== conversationId) {
+    logToTerminal("对话已切换，取消旧对话的回填。");
+    return;
+  }
+  if (isPageGenerating() || isGenerating) {
+    if (Date.now() >= deadline) {
+      logToTerminal("等待生成结束超时，已取消回填。");
+      return;
+    }
+    setTimeout(() => replyToGemini(text, filesToPaste, autoSend, conversationId, deadline), 500);
+    return;
+  }
   const inputEl = findInputElement();
   if (!inputEl) {
     logToTerminal("错误：未找到对话输入框（Gemini/ChatGPT），无法回填！");
@@ -953,8 +974,16 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
     inputEl.value = text;
   } else {
     // 清空输入框
-    document.execCommand("selectAll", false, null);
-    document.execCommand("delete", false, null);
+    // 将选区明确限定在输入框内，避免焦点失效时选中聊天正文。
+    if (document.activeElement !== inputEl && !inputEl.contains(document.activeElement)) {
+      logToTerminal("输入框未获得焦点，已取消回填。");
+      return;
+    }
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(inputEl);
+    selection.removeAllRanges();
+    selection.addRange(range);
 
     // 必须优先尝试 insertHTML 才能完整保留换行符，且确保 React / ProseMirror 前端状态同步
     const inserted = document.execCommand("insertHTML", false, htmlContent);
@@ -993,49 +1022,36 @@ function replyToGemini(text, filesToPaste = [], autoSend = true) {
   if (autoSend) {
     const sendDelay = filesToPaste && filesToPaste.length > 0 ? 1000 : 500;
     setTimeout(() => {
-      const sendButton = findSendButton();
-
-      if (sendButton) {
-        // 2. 检查是否处于禁用状态 (检测 disabled 属性和 aria-disabled 状态)
-        const checkDisabled = () => {
-          if (sendButton.disabled || sendButton.hasAttribute("disabled")) return true;
-          if (sendButton.getAttribute("aria-disabled") === "true") return true;
-          const parentContainer = sendButton.closest("gem-icon-button") || sendButton.closest(".send-button");
-          if (parentContainer) {
-            if (parentContainer.getAttribute("aria-disabled") === "true") return true;
-            if (parentContainer.classList.contains("disabled")) return true;
-          }
-          return false;
-        };
-
-        // 3. 使用轮询重试机制，每次间隔 200ms，最高重试 150 次（共 30 秒），以确保 React/Angular 状态响应并启用按钮
-        let attempts = 0;
-        const maxAttempts = 150;
-        const interval = setInterval(() => {
-          attempts++;
-          const isDisabled = checkDisabled();
-
-          // 每隔 2 秒 (10次尝试) 或首次尝试时打印一次等待日志，避免频繁刷屏
-          if (attempts % 10 === 0 || attempts === 1) {
-            logToTerminal(`等待发送按钮启用中 (已等待 ${((attempts * 200) / 1000).toFixed(1)} 秒)...`);
-          }
-
-          if (!isDisabled) {
-            sendButton.click();
-            logToTerminal("上传完成，已成功点击发送。");
-            clearInterval(interval);
-
-            // 自动重置连续运行步骤计数器，防止阻碍下一轮自动发送
-            autoRunDepth = 0;
-            updateDepthCounter();
-          } else if (attempts >= maxAttempts) {
-            logToTerminal("错误：发送按钮在 30 秒内未能启用，自动发送已取消，请手动点击发送。");
-            clearInterval(interval);
-          }
-        }, 200);
-      } else {
-        logToTerminal("错误：未能在页面中找到任何匹配的发送按钮！");
-      }
+      let attempts = 0;
+      const interval = setInterval(() => {
+        attempts++;
+        if (getConversationId() !== conversationId || !inputEl.isConnected) {
+          clearInterval(interval);
+          logToTerminal("页面或输入框已切换，自动发送已取消。");
+          return;
+        }
+        // 每次重新查询：SPA 可能替换按钮，也可能把原按钮改成停止按钮。
+        const sendButton = findSendButton();
+        const label = sendButton?.getAttribute("aria-label") || "";
+        const testId = sendButton?.getAttribute("data-testid") || "";
+        const container = sendButton?.closest("gem-icon-button, .send-button");
+        const canSend = sendButton && sendButton.isConnected &&
+          !sendButton.disabled && !sendButton.hasAttribute("disabled") &&
+          sendButton.getAttribute("aria-disabled") !== "true" &&
+          container?.getAttribute("aria-disabled") !== "true" &&
+          !container?.classList.contains("disabled") &&
+          !/stop|停止/i.test(label + " " + testId);
+        if (!isPageGenerating() && !isGenerating && canSend) {
+          clearInterval(interval);
+          sendButton.click();
+          logToTerminal("已点击发送按钮。");
+          autoRunDepth = 0;
+          updateDepthCounter();
+        } else if (attempts >= 150) {
+          clearInterval(interval);
+          logToTerminal("30 秒内未满足安全发送条件，请手动发送。");
+        }
+      }, 200);
     }, sendDelay);
   } else {
     setTimeout(() => {
@@ -1183,15 +1199,20 @@ function finishQueueExecution(autoSend) {
 // 核心逻辑：指令提取与控制分流
 // ==========================================
 function scanAndExecuteInstructions() {
-  logToTerminal("开始扫描页面中的待执行指令...");
+  if (isPageGenerating() || isGenerating || isQueueModeActive) return;
+  const scanConversationId = getConversationId();
+  logToTerminal("开始扫描最新回复中的待执行指令...");
 
   // 先同步加载当前 URL 对应会话下的已执行 ID 记录
   syncConvExecutedIds(() => {
+    if (getConversationId() !== scanConversationId || isPageGenerating() || isGenerating || isQueueModeActive) return;
+    const latestReply = getLatestAssistantReply();
+    if (!latestReply) return;
     // 兼容 ChatGPT 无 <pre> 包裹的代码块（使用 Set 去重避免重复处理）
     const unprocessedBlocks = Array.from(
       new Set([
-        ...document.querySelectorAll("pre code:not([data-glab-processed])"),
-        ...document.querySelectorAll("code.language-glab-call:not([data-glab-processed])"),
+        ...latestReply.querySelectorAll("pre code:not([data-glab-processed])"),
+        ...latestReply.querySelectorAll("code.language-glab-call:not([data-glab-processed])"),
       ]),
     );
     if (unprocessedBlocks.length === 0) return;
@@ -1205,6 +1226,7 @@ function scanAndExecuteInstructions() {
       return isGlabClass || hasInstructionKeywords;
     });
 
+    let hasInvalidInstruction = false;
     let pendingTasks = [];
     let isTaskArrayParsed = false; // 是否解析到了显式的多任务数组
 
@@ -1219,6 +1241,12 @@ function scanAndExecuteInstructions() {
 
         try {
           const parsed = JSON.parse(text);
+          const tasks = Array.isArray(parsed) ? parsed : [parsed];
+          if (!tasks.length || tasks.some(task => !task || typeof task !== "object" ||
+              typeof task.id !== "string" || !task.id.trim() || typeof task.action !== "string" ||
+              !task.action.trim() || !task.params || typeof task.params !== "object" || Array.isArray(task.params))) {
+            throw new Error("指令必须包含有效的 id、action 和 params 对象");
+          }
           if (Array.isArray(parsed)) {
             isTaskArrayParsed = true;
             parsed.forEach((task, index) => {
@@ -1259,7 +1287,8 @@ function scanAndExecuteInstructions() {
             pendingTasks.push(parsed);
           }
         } catch (e) {
-          // 解析失败说明内容可能仍在流式输出中，移除标记让下次扫描重试
+          hasInvalidInstruction = true;
+          // 保留重试机会，但不会把错误自动发送给模型，避免重试循环。
           codeEl.removeAttribute("data-glab-processed");
           console.error("[GLAB] 指令 JSON 解析失败:", e);
           logToTerminal(`指令 JSON 解析失败（内容可能未输出完）: ${e.message}`);
@@ -1267,6 +1296,15 @@ function scanAndExecuteInstructions() {
       }
     });
 
+    const outputError = document.getElementById("glab-output-error");
+    if (hasInvalidInstruction) {
+      unprocessedBlocks.forEach(block => block.removeAttribute("data-glab-processed"));
+      if (outputError) outputError.style.display = "block";
+      document.getElementById("glab-drawer")?.classList.add("open");
+      logToTerminal("本次回复含无效指令，未执行本次扫描中的任何指令。可点击“反馈输出中断”请求缩短重试。");
+      return;
+    }
+    if (outputError) outputError.style.display = "none";
     if (pendingTasks.length > 0) {
       // 写入存储强缓存
       pendingTasks.forEach((task) => currentConvExecutedIds.add(task.id));
@@ -1477,9 +1515,15 @@ document.addEventListener("keydown", (e) => {
 // ==========================================
 // 页面 Observer 与流式检测
 // ==========================================
-const observer = new MutationObserver(() => {
-  if (generateTimer) clearTimeout(generateTimer);
+function getLatestAssistantReply() {
+  const selector = detectRole() === "gpt"
+    ? '[data-message-author-role="assistant"]'
+    : 'model-response';
+  const replies = document.querySelectorAll(selector);
+  return replies.length ? replies[replies.length - 1] : null;
+}
 
+function isPageGenerating() {
   const hasStopBtn =
     !!document.querySelector('button[data-testid="stop-button"]') ||
     !!document.querySelector('button[data-testid*="stop"]') ||
@@ -1499,21 +1543,34 @@ const observer = new MutationObserver(() => {
     !!document.querySelector(".streaming") ||
     !!document.querySelector('[data-is-streaming="true"]');
 
-  const isCurrentlyGenerating = hasStopBtn || hasLoading;
+  return hasStopBtn || hasLoading;
+}
 
-  if (isCurrentlyGenerating) {
+const observer = new MutationObserver((mutations) => {
+  // 面板日志和输入框回填不属于模型输出，不能影响流式结束计时。
+  const relevant = mutations.some(({ target }) => {
+    const element = target.nodeType === 1 ? target : target.parentElement;
+    return element && !element.closest('#glab-panel-root, #prompt-textarea, [contenteditable="true"], textarea');
+  });
+  if (!relevant) return;
+  if (generateTimer) clearTimeout(generateTimer);
+
+  if (isPageGenerating()) {
     isGenerating = true;
-    updatePanelState("parsing", "解析指令中");
-  } else {
-    // 只有经历过生成状态后停止，才触发扫描，防止 DOM 其他变化引发死循环
-    generateTimer = setTimeout(() => {
-      if (isGenerating) {
-        isGenerating = false;
-        console.log("[GLAB Timer] AI 流结束，触发 scanAndExecuteInstructions()");
-        scanAndExecuteInstructions();
-      }
-    }, 1000);
+    updatePanelState("parsing", "等待输出完成");
+    return;
   }
+  if (!isGenerating) return;
+  const reply = getLatestAssistantReply();
+  const snapshot = reply?.textContent;
+  const conversationId = getConversationId();
+  generateTimer = setTimeout(() => {
+    generateTimer = null;
+    if (isPageGenerating() || getConversationId() !== conversationId ||
+        getLatestAssistantReply() !== reply || reply?.textContent !== snapshot) return;
+    isGenerating = false;
+    scanAndExecuteInstructions();
+  }, 2000);
 });
 
 // ==========================================
