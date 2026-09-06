@@ -80,6 +80,34 @@ AI 可以通过在回答中输出 `language-glab-call` 的 Markdown 代码块来
 }
 ```
 
+### 生成新 Skill
+
+AI 创建 Skill 前应先调用只读命令 `prepare_skill`，等待它返回当前连接使用的 Skills 目录、草稿路径、必需文件、`skill.json` 模板、所选运行时检测结果和完整安装流程：
+
+```glab-call
+{
+  "id": "prepare_my_skill",
+  "action": "prepare_skill",
+  "params": { "name": "my-skill", "runtime": "python3" },
+  "autoSend": true
+}
+```
+
+然后在工作目录的 `.glab-skill-drafts/my-skill/` 中生成 `skill.json`、`SKILL.md` 和入口脚本。长文件按分片规则逐轮生成。完成后调用：
+
+```glab-call
+{
+  "id": "install_my_skill",
+  "action": "install_skill",
+  "params": { "name": "my-skill" },
+  "autoSend": true
+}
+```
+
+`install_skill` 校验配置、入口和说明文档后安装到当前 Skills 目录。它不会覆盖已有 Skill，不会安装依赖或执行脚本；关闭 Auto-run 时需要批准。安装后让 AI 执行 `list_skills` 和 `load_skill` 确认，无需重启服务来刷新列表。
+
+此流程用于新建 Skill；已有同名目录需要另行修复或选择新名称。新增规则需重新加载扩展、刷新聊天并再次初始化，新增 CLI 命令需重启服务。
+
 ### 长输出与分轮写入
 
 普通短指令支持批量发送（JSON 数组或多个代码块）。**一个过长命令拆出的各块必须线性分轮**：生成当前块 → 执行成功 → 才生成下一块，不能一次输出多个分块或把它们打包成数组。
@@ -142,6 +170,8 @@ AI 可以通过在回答中输出 `language-glab-call` 的 Markdown 代码块来
 | `run_code` | 在 CLI 端的 VM 沙箱中执行临时 JS 代码 | `code` (string, 必填) |
 | `run_command` | 在本地工作根目录下执行指定的 Shell 命令行指令 | `command` (string, 必填) |
 | `paste_file` | 将本地文件作为剪贴板内容粘贴入输入框 | `path` (string, 必填) |
+| `prepare_skill` | 获取生成 Skill 的目录、格式、环境及安装条件（只读） | `name` (string, 必填), `runtime` (可选，默认 python3) |
+| `install_skill` | 校验并安装工作目录内的 Skill 草稿，不覆盖已有目录 | `name` (string, 必填) |
 | `list_skills` | 列出 Skills 目录下已声明的所有技能脚本 | 无 |
 | `load_skill` | 加载指定技能脚本的入口内容与文档 | `name` (string, 必填) |
 | `run_skill` | 触发执行指定技能脚本，并传递参数 | `name` (string, 必填), `args` (object, 可选) |

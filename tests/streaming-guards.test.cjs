@@ -146,3 +146,20 @@ for (const format of ['array', 'blocks']) {
     assert.equal(vm.runInContext('activeTaskQueue[1].params.path', h.context), 'short_1.txt');
   });
 }
+
+test('skill creation instructions require preparation and installation before discovery checks', () => {
+  const h = harness();
+  const prompt = vm.runInContext('generateInitPrompt("/project", "/custom-skills")', h.context);
+  assert.match(prompt, /必须先单独执行 prepare_skill/);
+  assert.match(prompt, /等待返回当前目录、文件规范和运行条件后再生成文件/);
+  assert.match(prompt, /skill.json、SKILL.md 和入口脚本/);
+  assert.match(prompt, /完成后调用 install_skill，再用 list_skills 与 load_skill 验证/);
+});
+
+test('prepare_skill is read-only while install_skill requires approval with Auto-run off', () => {
+  const h = harness();
+  vm.runInContext('isAutoRunEnabled = false; sent = []; approvals = []; sendRequestToCLI = request => sent.push(request.action); showConfirmUI = request => approvals.push(request.action);', h.context);
+  vm.runInContext('handleInstructionFlow({id:"prepare", action:"prepare_skill", params:{name:"demo"}}); handleInstructionFlow({id:"install", action:"install_skill", params:{name:"demo"}});', h.context);
+  assert.deepEqual(Array.from(h.context.sent), ['prepare_skill']);
+  assert.deepEqual(Array.from(h.context.approvals), ['install_skill']);
+});

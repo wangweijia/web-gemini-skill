@@ -2,6 +2,7 @@ const WebSocket = require("ws");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const { prepareSkill, installSkill } = require("./skill-authoring");
 const writeChunk = require("./chunk-writer").createChunkWriter();
 
 // ==========================================
@@ -321,6 +322,12 @@ async function executeAction(action, params, ctx) {
     case "run_code": {
       return runCodeInSandbox(params.code, ctx);
     }
+
+    case "prepare_skill":
+      return prepareSkill(params || {}, ctx);
+
+    case "install_skill":
+      return installSkill(params || {}, ctx);
 
     case "list_skills": {
       const skills = [];

@@ -744,7 +744,10 @@ function generateInitPrompt(workDir, skillsDir) {
   prompt += `3. **指令与任务队列**：允许单条 JSON 对象、JSON 数组或多个 glab-call 代码块。多条指令会按顺序串行执行并汇总反馈；普通短指令不限制数量，按内容长度决定是否分批；但一个过长命令拆出的各块必须遵守下面的线性分轮规则。依赖前一步返回值的指令应等待反馈再生成；一批指令输出完后停止，等待执行结果再继续。autoSend 默认为 true，设为 false 时等待用户手动发送反馈。单条格式：\n`;
   prompt += '\n```glab-call\n{"id":"唯一ID","action":"list_dir","params":{"path":"."},"autoSend":true}\n```\n\n';
   prompt += '多指令示例：\n```glab-call\n[{"id":"read_a","action":"read_file","params":{"path":"a.txt"}},{"id":"read_b","action":"read_file","params":{"path":"b.txt"},"autoSend":true}]\n```\n\n';
+  prompt += `**创建 Skill 前置规则**：当用户要求生成或安装新的 Skill 时，必须先单独执行 prepare_skill，params: { "name": "技能目录名", "runtime": "python3|node|bash" }，等待返回当前目录、文件规范和运行条件后再生成文件。不得凭记忆猜测 Skill 格式。按返回的草稿路径写入 skill.json、SKILL.md 和入口脚本，完成后调用 install_skill，再用 list_skills 与 load_skill 验证；长文件仍按线性分轮规则生成。\n\n`;
   prompt += `**可用操作速查表**：\n`;
+  prompt += `- \`prepare_skill\`：只读获取创建技能所需的当前条件。params: { "name": "...", "runtime": "python3" }\n`;
+  prompt += `- \`install_skill\`：校验并安装工作目录 .glab-skill-drafts/<name> 下的技能草稿，不覆盖已有技能。params: { "name": "..." }\n`;
   prompt += `- \`list_dir\`：列目录。params: { "path": "..." }\n`;
   prompt += `- \`read_file\`：读文件. params: { "path": "..." }\n`;
   prompt += `- \`write_file\`：新建或覆盖文件。params: { "path": "...", "content": "..." }\n`;
@@ -1364,7 +1367,7 @@ function sendRequestToCLI(request) {
 }
 
 function handleInstructionFlow(request) {
-  const readOnlyActions = ["list_dir", "read_file", "list_skills", "load_skill", "paste_file", "relay_verify", "relay_result"];
+  const readOnlyActions = ["prepare_skill", "list_dir", "read_file", "list_skills", "load_skill", "paste_file", "relay_verify", "relay_result"];
 
   if (autoRunDepth >= 10) {
     updatePanelState("error", "步骤超限锁定");
