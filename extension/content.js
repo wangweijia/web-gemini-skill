@@ -8,6 +8,8 @@ let isGenerating = false;
 let generateTimer = null;
 let lastObservedReply = null;
 let lastObservedReplyText = "";
+let missingReplyLogged = false;
+let lastVoiceIdle = null;
 let autoRunDepth = 0;
 let isAutoRunEnabled = true;
 let isAutoVerifyEnabled = false;
@@ -848,8 +850,10 @@ function connectSocket() {
             observer.disconnect(); // 防止重复观察
             lastObservedReply = getLatestAssistantReply();
             lastObservedReplyText = lastObservedReply?.textContent || "";
+            lastVoiceIdle = isChatGPTVoiceIdle();
             observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-state", "data-is-streaming", "aria-busy", "data-testid", "aria-label", "class"] });
             logToTerminal("网页消息监听（Observer）已成功激活工作。");
+            if (detectRole() === "gpt") logToTerminal(`GPT 输入区“开始语音”按钮：${lastVoiceIdle ? "可见" : "未出现"}。`);
           } else {
             document.getElementById("glab-init-prompt-btn").disabled = true;
             logToTerminal("连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。");
@@ -1214,28 +1218,32 @@ function scanAndExecuteInstructions() {
   syncConvExecutedIds(() => {
     if (getConversationId() !== scanConversationId || isPageGenerating() || isGenerating || isQueueModeActive) return;
     const latestReply = getLatestAssistantReply();
-    if (!latestReply) return;
-    // 兼容 ChatGPT 无 <pre> 包裹的代码块（使用 Set 去重避免重复处理）
-    const unprocessedBlocks = Array.from(
-      new Set([
-        ...latestReply.querySelectorAll("pre code:not([data-glab-processed])"),
-        ...latestReply.querySelectorAll("code.language-glab-call:not([data-glab-processed])"),
-      ]),
-    );
+    if (!latestReply) {
+      logToTerminal(`未找到当前页面的 AI 回复容器（轮次: ${document.querySelectorAll('[data-testid^="conversation-turn-"]').length}，代码块: ${document.querySelectorAll('[data-markdown-copy="code-block"]').length}），无法扫描指令。`);
+      return;
+    }
+    // ChatGPT 的新版代码块使用 data-markdown-copy 容器，code 不再带语言 class 或 pre 父元素。
+    const codeBlockSelector = 'pre code, code.language-glab-call, [data-markdown-copy="code-block"] code';
+    const unprocessedBlocks = Array.from(latestReply.querySelectorAll(
+      'pre code:not([data-glab-processed]), code.language-glab-call:not([data-glab-processed]), [data-markdown-copy="code-block"] code:not([data-glab-processed])',
+    ));
     // ChatGPT 有时把指令作为普通文本输出。仅接受整条回复就是 JSON 的情形，
     // 避免从解释文字或引用示例中误执行命令。
     const replyContent = latestReply.querySelector?.(".markdown, .prose, [data-message-content]") || latestReply;
     const plainText = replyContent.textContent?.trim() || "";
-    if (!unprocessedBlocks.length && !latestReply.querySelectorAll("pre code, code.language-glab-call").length &&
+    if (!unprocessedBlocks.length && !latestReply.querySelectorAll(codeBlockSelector).length &&
         !replyContent.hasAttribute?.("data-glab-processed") &&
         (plainText.startsWith("{") || plainText.startsWith("[")) &&
         plainText.includes('"action"') && plainText.includes('"params"')) {
       unprocessedBlocks.push(replyContent);
     }
-    if (unprocessedBlocks.length === 0) return;
+    if (unprocessedBlocks.length === 0) {
+      logToTerminal("最新 AI 回复中未发现可扫描的新指令代码块。");
+      return;
+    }
 
     // 获取页面中所有的 GLAB 代码块，以便建立稳定的序号序列（保证页面刷新后历史任务 ID 映射的稳定性）
-    const allCodeBlocks = Array.from(new Set([...document.querySelectorAll("pre code"), ...document.querySelectorAll("code.language-glab-call")]));
+    const allCodeBlocks = Array.from(document.querySelectorAll(codeBlockSelector));
     const glabBlocks = allCodeBlocks.filter((codeEl) => {
       const text = codeEl.textContent.trim();
       const isGlabClass = codeEl.classList.contains("language-glab-call");
@@ -1535,65 +1543,155 @@ document.addEventListener("keydown", (e) => {
 // 页面 Observer 与流式检测
 // ==========================================
 function getLatestAssistantReply() {
+  if (detectRole() === "gpt") {
+    // 先看最后一个对话轮次，避免在用户刚发送消息时回退到上一条 AI 回复。
+    const turns = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"], main article'))
+      .filter((element) => element.getAttribute?.("data-testid")?.startsWith("conversation-turn-") ||
+        element.matches?.("main article"));
+    if (turns.length) {
+      const latestTurn = turns[turns.length - 1];
+      const userSelector = '[data-message-author-role="user"], [data-testid="user-message"]';
+      if (latestTurn.matches?.(userSelector) || latestTurn.querySelector?.(userSelector)) return null;
+      const assistantSelector = '[data-message-author-role="assistant"], [data-testid="assistant-message"]';
+      if (latestTurn.matches?.(assistantSelector)) return latestTurn;
+      const markedAssistant = latestTurn.querySelector?.(assistantSelector);
+      if (markedAssistant) return markedAssistant;
+      if (latestTurn.querySelector?.('.markdown, .prose, [data-markdown-copy="code-block"]')) return latestTurn;
+      return null;
+    }
+  }
   const selector = detectRole() === "gpt"
-    ? '[data-message-author-role="assistant"]'
+    ? '[data-markdown-text-style="assistant-message"], [data-message-author-role="assistant"], [data-testid="assistant-message"]'
     : 'model-response';
   const replies = document.querySelectorAll(selector);
   return replies.length ? replies[replies.length - 1] : null;
 }
 
+function isChatGPTVoiceIdle() {
+  if (detectRole() !== "gpt") return false;
+  const selectors = ['button[aria-label="开始语音"]', 'button[aria-label="Start voice"]',
+    'button[aria-label="Start voice mode"]'];
+  return selectors.some((selector) => {
+    const button = document.querySelector(selector);
+    return button && !button.disabled && button.getAttribute?.("aria-hidden") !== "true" &&
+      (button.getClientRects?.().length ?? 1) > 0;
+  });
+}
+
+function noteVoiceIdleState() {
+  if (detectRole() !== "gpt") return false;
+  const visible = isChatGPTVoiceIdle();
+  if (visible === lastVoiceIdle) return false;
+  lastVoiceIdle = visible;
+  logToTerminal(`GPT 输入区“开始语音”按钮${visible ? "已出现" : "已消失"}。`);
+  return true;
+}
+
+function getGeneratingSignal() {
+  const stopSelectors = [
+    'button[data-testid="stop-button"]',
+    'button[aria-label="停止"]',
+    'button[aria-label="停止回复"]',
+    'button[aria-label="停止生成"]',
+    'button[aria-label="停止响应"]',
+    'button[aria-label="Stop generating"]',
+    'button[aria-label="Stop streaming"]',
+    'button[aria-label="Stop"]',
+  ];
+  for (const selector of stopSelectors) {
+    const button = document.querySelector(selector);
+    if (button && !button.disabled && button.getAttribute?.("aria-hidden") !== "true" &&
+        (button.getClientRects?.().length ?? 1) > 0) return selector;
+  }
+
+  // ChatGPT 恢复“开始语音”按钮时，回复区遗留的 busy 标记不能继续阻止扫描。
+  if (isChatGPTVoiceIdle()) return "";
+
+  // 通用 busy/streaming 标记可能常驻在侧栏或输入区，只检查当前 AI 回复。
+  const reply = getLatestAssistantReply();
+  if (!reply) return "";
+  const loadingSelectors = [".loading-indicator", ".result-streaming", '[aria-busy="true"]',
+    '[data-state="streaming"]', ".streaming", '[data-is-streaming="true"]'];
+  for (const selector of loadingSelectors) {
+    if (reply.matches?.(selector) || reply.querySelector?.(selector)) return selector;
+  }
+  return "";
+}
+
 function isPageGenerating() {
-  const hasStopBtn =
-    !!document.querySelector('button[data-testid="stop-button"]') ||
-    !!document.querySelector('button[data-testid*="stop"]') ||
-    !!document.querySelector('button[aria-label="停止回复"]') ||
-    !!document.querySelector('button[aria-label="停止生成"]') ||
-    !!document.querySelector('button[aria-label="停止响应"]') ||
-    !!document.querySelector('button[aria-label="Stop generating"]') ||
-    !!document.querySelector('button[aria-label="Stop streaming"]') ||
-    !!document.querySelector('button[aria-label*="Stop"]') ||
-    !!document.querySelector('button[aria-label*="停止"]');
+  return !!getGeneratingSignal();
+}
 
-  const hasLoading =
-    !!document.querySelector(".loading-indicator") ||
-    !!document.querySelector(".result-streaming") ||
-    !!document.querySelector('[aria-busy="true"]') ||
-    !!document.querySelector('[data-state="streaming"]') ||
-    !!document.querySelector(".streaming") ||
-    !!document.querySelector('[data-is-streaming="true"]');
-
-  return hasStopBtn || hasLoading;
+function scheduleReplyScan(reply, snapshot, conversationId, waitForCompletion = false) {
+  if (generateTimer) clearTimeout(generateTimer);
+  generateTimer = setTimeout(() => {
+    generateTimer = null;
+    if (getConversationId() !== conversationId) return;
+    noteVoiceIdleState();
+    const currentReply = getLatestAssistantReply();
+    if (isPageGenerating()) {
+      isGenerating = true;
+      scheduleReplyScan(currentReply, currentReply?.textContent, conversationId, true);
+      return;
+    }
+    if (waitForCompletion) {
+      if (currentReply === lastObservedReply && currentReply?.textContent === lastObservedReplyText) {
+        isGenerating = false;
+        logToTerminal("页面输出已结束，但未发现新的 AI 回复；不会扫描旧回复。");
+        return;
+      }
+      lastObservedReply = currentReply;
+      lastObservedReplyText = currentReply?.textContent || "";
+      scheduleReplyScan(currentReply, currentReply?.textContent, conversationId);
+      return;
+    }
+    if (!currentReply) {
+      isGenerating = false;
+      logToTerminal(`页面输出已结束，但未找到 AI 回复容器（轮次: ${document.querySelectorAll('[data-testid^="conversation-turn-"]').length}，代码块: ${document.querySelectorAll('[data-markdown-copy="code-block"]').length}）。`);
+      return;
+    }
+    if (currentReply !== reply || currentReply.textContent !== snapshot) {
+      lastObservedReply = currentReply;
+      lastObservedReplyText = currentReply.textContent;
+      scheduleReplyScan(currentReply, currentReply.textContent, conversationId);
+      return;
+    }
+    isGenerating = false;
+    scanAndExecuteInstructions();
+  }, 2000);
 }
 
 const observer = new MutationObserver((mutations) => {
   // 面板日志和输入框回填不属于模型输出，不能影响流式结束计时。
-  const relevant = mutations.some(({ target }) => {
+  const voiceChanged = noteVoiceIdleState();
+  const relevant = voiceChanged || mutations.some(({ target }) => {
     const element = target.nodeType === 1 ? target : target.parentElement;
     return element && !element.closest('#glab-panel-root, #prompt-textarea, [contenteditable="true"], textarea');
   });
   if (!relevant) return;
 
-  if (isPageGenerating()) {
-    if (generateTimer) clearTimeout(generateTimer);
+  const generatingSignal = getGeneratingSignal();
+  if (generatingSignal) {
+    if (!isGenerating) logToTerminal(`检测到 AI 正在生成回复（标记: ${generatingSignal}），等待输出完成。`);
     isGenerating = true;
     updatePanelState("parsing", "等待输出完成");
+    const reply = getLatestAssistantReply();
+    scheduleReplyScan(reply, reply?.textContent, getConversationId(), true);
     return;
   }
   const reply = getLatestAssistantReply();
-  if (!reply) return;
+  if (!reply) {
+    if (!missingReplyLogged) logToTerminal("页面发生变化，但未找到 AI 回复容器。");
+    missingReplyLogged = true;
+    return;
+  }
+  missingReplyLogged = false;
   const snapshot = reply?.textContent;
   if (!isGenerating && reply === lastObservedReply && snapshot === lastObservedReplyText) return;
-  if (generateTimer) clearTimeout(generateTimer);
+  if (reply !== lastObservedReply) logToTerminal("检测到新的 AI 回复，等待内容稳定。");
   lastObservedReply = reply;
   lastObservedReplyText = snapshot;
-  const conversationId = getConversationId();
-  generateTimer = setTimeout(() => {
-    generateTimer = null;
-    if (isPageGenerating() || getConversationId() !== conversationId ||
-        getLatestAssistantReply() !== reply || reply?.textContent !== snapshot) return;
-    isGenerating = false;
-    scanAndExecuteInstructions();
-  }, 2000);
+  scheduleReplyScan(reply, snapshot, getConversationId());
 });
 
 // ==========================================
