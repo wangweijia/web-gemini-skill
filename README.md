@@ -68,7 +68,7 @@ node server.js
 
 ## 📝 指令集控制规范
 
-AI 可以通过在回答中输出 `language-glab-call` 的 Markdown 代码块来向插件发送指令。
+AI 可以通过在回答中输出 `language-glab-call` 的 Markdown 代码块来向插件发送指令。若 ChatGPT 将单条指令输出为整条回复的纯 JSON（没有代码块），插件也会识别；夹在说明文字中的 JSON 不会执行。
 
 ### 单步指令示例：
 ```glab-call

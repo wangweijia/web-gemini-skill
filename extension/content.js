@@ -6,6 +6,8 @@ let socket = null;
 let wsPort = 9003;
 let isGenerating = false;
 let generateTimer = null;
+let lastObservedReply = null;
+let lastObservedReplyText = "";
 let autoRunDepth = 0;
 let isAutoRunEnabled = true;
 let isAutoVerifyEnabled = false;
@@ -844,6 +846,8 @@ function connectSocket() {
 
             // 【核心安全保护】只有握手锁定成功后，才挂载 Observer 开始监听页面消息
             observer.disconnect(); // 防止重复观察
+            lastObservedReply = getLatestAssistantReply();
+            lastObservedReplyText = lastObservedReply?.textContent || "";
             observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["data-state", "data-is-streaming", "aria-busy", "data-testid", "aria-label", "class"] });
             logToTerminal("网页消息监听（Observer）已成功激活工作。");
           } else {
@@ -1218,6 +1222,16 @@ function scanAndExecuteInstructions() {
         ...latestReply.querySelectorAll("code.language-glab-call:not([data-glab-processed])"),
       ]),
     );
+    // ChatGPT 有时把指令作为普通文本输出。仅接受整条回复就是 JSON 的情形，
+    // 避免从解释文字或引用示例中误执行命令。
+    const replyContent = latestReply.querySelector?.(".markdown, .prose, [data-message-content]") || latestReply;
+    const plainText = replyContent.textContent?.trim() || "";
+    if (!unprocessedBlocks.length && !latestReply.querySelectorAll("pre code, code.language-glab-call").length &&
+        !replyContent.hasAttribute?.("data-glab-processed") &&
+        (plainText.startsWith("{") || plainText.startsWith("[")) &&
+        plainText.includes('"action"') && plainText.includes('"params"')) {
+      unprocessedBlocks.push(replyContent);
+    }
     if (unprocessedBlocks.length === 0) return;
 
     // 获取页面中所有的 GLAB 代码块，以便建立稳定的序号序列（保证页面刷新后历史任务 ID 映射的稳定性）
@@ -1240,7 +1254,9 @@ function scanAndExecuteInstructions() {
 
       if (isGlabClass || hasInstructionKeywords) {
         codeEl.setAttribute("data-glab-processed", "true");
-        const blockIndex = glabBlocks.indexOf(codeEl);
+        const blockIndex = codeEl === replyContent
+          ? `plain_${Array.from(document.querySelectorAll(detectRole() === "gpt" ? '[data-message-author-role="assistant"]' : 'model-response')).indexOf(latestReply)}`
+          : glabBlocks.indexOf(codeEl);
 
         try {
           const parsed = JSON.parse(text);
@@ -1556,16 +1572,20 @@ const observer = new MutationObserver((mutations) => {
     return element && !element.closest('#glab-panel-root, #prompt-textarea, [contenteditable="true"], textarea');
   });
   if (!relevant) return;
-  if (generateTimer) clearTimeout(generateTimer);
 
   if (isPageGenerating()) {
+    if (generateTimer) clearTimeout(generateTimer);
     isGenerating = true;
     updatePanelState("parsing", "等待输出完成");
     return;
   }
-  if (!isGenerating) return;
   const reply = getLatestAssistantReply();
+  if (!reply) return;
   const snapshot = reply?.textContent;
+  if (!isGenerating && reply === lastObservedReply && snapshot === lastObservedReplyText) return;
+  if (generateTimer) clearTimeout(generateTimer);
+  lastObservedReply = reply;
+  lastObservedReplyText = snapshot;
   const conversationId = getConversationId();
   generateTimer = setTimeout(() => {
     generateTimer = null;

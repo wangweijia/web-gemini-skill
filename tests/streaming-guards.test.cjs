@@ -31,6 +31,7 @@ function harness() {
 
 test('completion timer rechecks generation before scanning', () => {
   const h = harness();
+  h.document.querySelectorAll = () => [{ textContent: 'reply' }];
   vm.runInContext('isGenerating = true; scanCount = 0; scanAndExecuteInstructions = () => scanCount++', h.context);
   h.mutate();
   h.document.querySelector = () => ({}); // generation resumes before timer fires
@@ -52,6 +53,18 @@ test('completion requires stable reply text', () => {
   assert.equal(h.context.scanCount, 1);
 });
 
+test('stable assistant output is scanned even when no stop button was observed', () => {
+  const h = harness();
+  const reply = { textContent: 'new reply' };
+  h.document.querySelectorAll = () => [reply];
+  vm.runInContext('scanCount = 0; scanAndExecuteInstructions = () => scanCount++', h.context);
+  h.mutate();
+  h.timers.pop()();
+  assert.equal(h.context.scanCount, 1);
+  h.mutate();
+  assert.equal(h.timers.length, 0);
+});
+
 test('incoming feedback waits without touching the editor while generating', () => {
   const h = harness();
   h.document.querySelector = () => ({});
@@ -69,7 +82,35 @@ test('scan queries only latest assistant reply for pending commands', () => {
     return [oldReply, latestReply];
   };
   vm.runInContext('syncConvExecutedIds = (callback) => callback(); scanAndExecuteInstructions()', h.context);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
+});
+
+test('standalone plain JSON command executes once', () => {
+  const h = harness();
+  const reply = {
+    textContent: '{"id":"health","action":"run_command","params":{"command":"uptime"}}',
+    classList: { contains() { return false; } },
+    querySelectorAll() { return []; },
+    hasAttribute(name) { return this.processed === name; },
+    setAttribute(name) { this.processed = name; },
+    removeAttribute() { this.processed = null; },
+  };
+  h.document.querySelectorAll = selector => selector.includes('data-message-author-role') ? [reply] : [];
+  vm.runInContext('syncConvExecutedIds = callback => callback(); safeSetStorage = () => {}; sent = []; socket = {send: payload => sent.push(JSON.parse(payload))};', h.context);
+  vm.runInContext('scanAndExecuteInstructions(); scanAndExecuteInstructions()', h.context);
+  assert.equal(h.context.sent.length, 1);
+  assert.equal(h.context.sent[0].action, 'run_command');
+  assert.equal(h.context.sent[0].id, 'health_seq_plain_0');
+});
+
+test('JSON embedded in prose is ignored', () => {
+  const h = harness();
+  const reply = {
+    textContent: 'Example: {"id":"health","action":"run_command","params":{"command":"uptime"}}',
+    querySelectorAll() { return []; },
+  };
+  h.document.querySelectorAll = selector => selector.includes('data-message-author-role') ? [reply] : [];
+  vm.runInContext('syncConvExecutedIds = callback => callback(); handleInstructionFlow = () => { throw Error("must not execute"); }; scanAndExecuteInstructions()', h.context);
 });
 
 test('switching conversations cancels delayed feedback', () => {
