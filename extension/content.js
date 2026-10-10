@@ -785,7 +785,7 @@ function detectRole() {
 function connectSocket() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
-  const url = `ws://localhost:${wsPort}`;
+  const url = `ws://127.0.0.1:${wsPort}`;
   socket = new WebSocket(url);
 
   socket.onopen = () => {

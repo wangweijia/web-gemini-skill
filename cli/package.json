@@ -3,11 +3,23 @@
   "version": "1.0.0",
   "description": "General Local Agent Bridge (GLAB) 本地代理服务",
   "main": "server.js",
+  "bin": {
+    "glab-service": "service.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "ws": "^8.16.0"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "service:install": "node service.js install",
+    "service:start": "node service.js start",
+    "service:stop": "node service.js stop",
+    "service:restart": "node service.js restart",
+    "service:status": "node service.js status",
+    "service:uninstall": "node service.js uninstall"
   },
   "author": "AI 协同研发组",
   "license": "ISC"

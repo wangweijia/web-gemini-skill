@@ -17,6 +17,7 @@ glab/
 │   └── background.js   # 扩展后台服务
 ├── cli/                # 本地 OS 代理服务端 (WebSocket Server)
 │   ├── server.js       # Node.js WebSocket 服务，集成 Path Jail 目录锁及安全沙箱
+│   ├── service.js      # macOS 后台服务安装、状态与卸载管理
 │   └── package.json    # CLI 项目依赖
 ├── prd/                # 产品需求与技术规范设计文档
 └── README.md           # 本文档说明
@@ -45,18 +46,44 @@ glab/
 3. 点击 **“加载已解压的扩展程序”** (Load unpacked)。
 4. 选择本项目中的 `extension` 文件夹导入。
 
-### 2. 启动本地 CLI 代理服务
-本地服务运行在 Node.js 环境中，需要首先安装依赖：
+### 2. macOS 菜单栏 App（推荐）
+
+开发机首次打包需要 Swift 编译器、Node.js 20 或更新版本，并在 `cli` 目录安装依赖：
 ```bash
 cd cli
-npm install
+npm ci
+cd ..
+zsh scripts/build-mac-app.sh
 ```
-启动服务时，可选择性通过 `--skills-dir` 提供指定的脚本技能目录，或者用 `--port` 指定自定义端口（默认为 9003）。默认不传参数启动即可：
+
+双击生成的 `dist/GLAB.app`，或将它复制到 `~/Applications/GLAB.app` 后从 Finder 打开；菜单栏会出现 **GLAB**。点击它可以查看服务状态与 PID，执行「安装并启动服务」「停止服务」「重新启动服务」以及「卸载后台服务（取消登录自启）」，也可以打开日志文件夹。App 已内置 Node 运行时和服务代码，打包后不依赖源码目录。首次使用时点击「安装并启动服务」；已通过下述 CLI 方法安装服务的用户，打开 App 后可直接管理现有服务。
+
+「退出菜单栏 App」只关闭图形界面，不会关闭后台服务。「停止服务」只停止当前登录会话，下次登录仍会自动启动；如需彻底关闭登录自启，选择「卸载后台服务」。App 本身不会在登录时自动打开，但后台服务会按安装设置运行。
+
+### 2a. 终端管理方式（可选）
+首次安装需要 Node.js 20 或更新版本。安装完成后，macOS 会在登录时启动并保活 GLAB，不需要保持终端窗口打开：
 ```bash
-node server.js
+cd cli
+npm ci
+npm run service:install
 ```
-> [!NOTE]
-> 新安装默认使用 `~/.glab-skills`。若新目录不存在而旧目录 `~/.web-gemini-skill` 已存在，则继续使用旧目录，不自动搬迁文件。插件保存的 Skills 路径优先于 CLI 默认值，`--skills-dir=/绝对路径` 可指定 CLI 默认目录。
+
+安装器会把 CLI、依赖和当前 Node 运行时复制到 `~/Library/Application Support/GLAB/cli`，再注册用户级 LaunchAgent。安装后源码目录可以移动或删除。更新 CLI 代码时，在新源码目录重新运行 `npm run service:install`。如果原先用 `node server.js` 在终端运行服务，请先停止旧进程，避免占用 9003 端口。
+
+查看状态、停止、重新启动或卸载：
+```bash
+npm run service:status
+npm run service:stop
+npm run service:start
+npm run service:restart
+npm run service:uninstall
+```
+
+日志位于 `~/Library/Logs/GLAB/cli.out.log` 和 `cli.err.log`。`service:stop` 只停止本次登录会话，下一次登录会重新启动；`service:uninstall` 移除后台服务和已安装程序，保留日志和 Skills。需要自定义端口或默认 Skills 目录时，在安装命令后加参数，例如 `npm run service:install -- --port=9004 --skills-dir=/绝对路径`，并在扩展面板中配置相同端口。
+
+源码目录删除后，仍可用安装目录内的运行时管理服务，例如 `~/Library/Application\ Support/GLAB/cli/bin/node ~/Library/Application\ Support/GLAB/cli/service.js status`。卸载前也可用同样方式执行 `uninstall`。
+
+新安装默认使用 `~/.glab-skills`。若新目录不存在而旧目录 `~/.web-gemini-skill` 已存在，则继续使用旧目录，不自动搬迁文件。插件保存的 Skills 路径优先于 CLI 默认值。服务只监听本机 `127.0.0.1`。其他系统仍可在 `cli` 目录用 `npm start` 前台运行。
 
 ### 3. 初始化连接与运行
 1. 打开 [Gemini](https://gemini.google.com/) 或 [ChatGPT](https://chatgpt.com/)。

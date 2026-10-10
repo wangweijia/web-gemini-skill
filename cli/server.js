@@ -2,6 +2,8 @@ const WebSocket = require("ws");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const http = require("http");
+const { isAllowedOrigin } = require("./origins");
 const { prepareSkill, installSkill } = require("./skill-authoring");
 const writeChunk = require("./chunk-writer").createChunkWriter();
 
@@ -150,9 +152,22 @@ function runCodeInSandbox(codeToRun, ctx) {
 // ==========================================
 // WebSocket 服务启动
 // ==========================================
-const wss = new WebSocket.Server({ port: PORT });
+const httpServer = http.createServer((_request, response) => {
+  response.writeHead(404);
+  response.end();
+});
+const wss = new WebSocket.Server({ noServer: true });
 
-wss.on("error", (err) => {
+httpServer.on("upgrade", (request, socket, head) => {
+  if (!isAllowedOrigin(request.headers.origin)) {
+    console.warn(`[GLAB CLI] 拒绝来自 ${request.headers.origin} 的 WebSocket 连接`);
+    socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+    return;
+  }
+  wss.handleUpgrade(request, socket, head, (ws) => wss.emit("connection", ws, request));
+});
+
+httpServer.on("error", (err) => {
   if (err.code === "EADDRINUSE" || err.message.includes("EADDRINUSE")) {
     console.error(`\n\x1b[31m[错误] 端口 ${PORT} 已被占用，无法启动服务。\x1b[0m`);
     console.error(`请使用 --port=XXXX 命令行参数指定一个不同的空闲端口。`);
@@ -164,7 +179,9 @@ wss.on("error", (err) => {
   process.exit(1);
 });
 
-console.log(`\x1b[32m[GLAB CLI] 服务已启动。正在尝试监听端口: ${PORT}\x1b[0m`);
+httpServer.listen(PORT, "127.0.0.1", () => {
+  console.log(`\x1b[32m[GLAB CLI] 服务已启动。监听 127.0.0.1:${PORT}\x1b[0m`);
+});
 
 wss.on("connection", (ws) => {
   connContexts.set(ws, { safeRoot: "", skillsDir: defaultSkillsDir, role: "" });
