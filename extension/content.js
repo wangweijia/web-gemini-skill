@@ -27,6 +27,133 @@ let activeTaskQueue = []; // 当前处于待执行状态的子任务队列
 let queueResultsCollector = []; // 已执行完的子任务结果汇总
 let isQueueModeActive = false; // 是否处于队列执行模式
 let queueFilesToPaste = []; // 待粘贴的文件队列
+let panelState = "connecting";
+
+const panelIcons = {
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  folder: '<path d="M3 7V5h6l2 2h10v12H3Z"/>',
+  file: '<path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h4M9 12h6M9 16h6"/>',
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/>',
+  code: '<path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16"/>',
+  skill: '<path d="m13 3-9 11h7l-1 7 10-12h-7Z"/>',
+  relay: '<path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/>',
+  send: '<path d="m3 3 18 9-18 9 4-9Zm4 9h14"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>',
+  alert: '<path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3v1"/>',
+};
+
+const taskPresentation = {
+  list_dir: ["浏览目录", "folder"],
+  read_file: ["读取文件", "file"],
+  write_file: ["写入文件", "file"],
+  write_file_chunk: ["写入分片", "file"],
+  update_file: ["更新文件", "file"],
+  run_code: ["运行代码", "code"],
+  run_command: ["执行命令", "terminal"],
+  paste_file: ["读取附件", "file"],
+  prepare_skill: ["准备 Skill", "skill"],
+  install_skill: ["安装 Skill", "skill"],
+  list_skills: ["查找 Skills", "skill"],
+  load_skill: ["加载 Skill", "skill"],
+  run_skill: ["运行 Skill", "skill"],
+  relay_verify: ["发送跨模型校验", "relay"],
+  relay_result: ["返回校验结果", "relay"],
+};
+
+function panelIcon(name) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${panelIcons[name] || panelIcons.clock}</svg>`;
+}
+
+function updateTaskState(request, awaitingApproval = false) {
+  const [label, icon] = Object.hasOwn(taskPresentation, request.action)
+    ? taskPresentation[request.action] : [request.action, "code"];
+  const params = request.params || {};
+  let detail = params.path || params.command || params.name || "";
+  if (request.action === "write_file_chunk" && Number.isInteger(params.chunkIndex) && Number.isInteger(params.totalChunks)) {
+    detail = `${detail} · 分片 ${params.chunkIndex + 1} / ${params.totalChunks}`;
+  }
+  if (request.action === "relay_verify" || request.action === "relay_result") {
+    detail = `目标：${params.target === "gpt" ? "ChatGPT" : params.target === "gemini" ? "Gemini" : params.target || "未指定"}`;
+  }
+  updatePanelState(awaitingApproval ? "pending" : "executing", awaitingApproval ? `等待授权 · ${label}` : label, {
+    icon,
+    detail: detail || `指令：${request.action}`,
+    progress: isQueueModeActive ? {
+      completed: queueResultsCollector.length,
+      total: queueResultsCollector.length + activeTaskQueue.length + 1,
+    } : null,
+  });
+}
+
+function positionGLABPanel() {
+  const root = document.getElementById("glab-panel-root");
+  const drawer = document.getElementById("glab-drawer");
+  if (!root?.isConnected || !drawer) return;
+  const margin = 12;
+  const rect = root.getBoundingClientRect();
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - rect.width - margin));
+  const top = Math.max(margin, Math.min(rect.top, window.innerHeight - rect.height - margin));
+  root.style.right = `${window.innerWidth - left - rect.width}px`;
+  root.style.bottom = `${window.innerHeight - top - rect.height}px`;
+
+  const above = Math.max(0, top - margin - 8);
+  const below = Math.max(0, window.innerHeight - top - rect.height - margin - 8);
+  const openAbove = above >= 520 || above >= below;
+  drawer.style.maxHeight = `${openAbove ? above : below}px`;
+  const drawerLeft = Math.max(margin, Math.min(left + rect.width - drawer.offsetWidth, window.innerWidth - drawer.offsetWidth - margin));
+  drawer.style.right = `${window.innerWidth - drawerLeft - drawer.offsetWidth}px`;
+  drawer.style.bottom = openAbove
+    ? `${window.innerHeight - top + 8}px`
+    : `${window.innerHeight - top - rect.height - 8 - drawer.offsetHeight}px`;
+}
+
+function bindPanelDragging(root, ball, drawer) {
+  let drag = null;
+  let suppressClick = false;
+  ball.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    const rect = root.getBoundingClientRect();
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, right: window.innerWidth - rect.right, bottom: window.innerHeight - rect.bottom, moved: false };
+    suppressClick = false;
+    ball.setPointerCapture(event.pointerId);
+  });
+  document.addEventListener("pointermove", (event) => {
+    if (!drag || drag.id !== event.pointerId) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    drag.moved = true;
+    ball.setAttribute("data-dragging", "true");
+    root.style.right = `${drag.right - dx}px`;
+    root.style.bottom = `${drag.bottom - dy}px`;
+    positionGLABPanel();
+  });
+  const finishDrag = (event) => {
+    if (!drag || drag.id !== event.pointerId) return;
+    suppressClick = drag.moved;
+    if (drag.moved) {
+      safeSetStorage({ glabPanelPosition: { right: parseFloat(root.style.right), bottom: parseFloat(root.style.bottom) } });
+    }
+    drag = null;
+    ball.removeAttribute("data-dragging");
+    if (ball.hasPointerCapture(event.pointerId)) ball.releasePointerCapture(event.pointerId);
+  };
+  document.addEventListener("pointerup", finishDrag);
+  document.addEventListener("pointercancel", finishDrag);
+  ball.addEventListener("lostpointercapture", finishDrag);
+  ball.addEventListener("click", (event) => {
+    if (suppressClick && event.detail !== 0) {
+      suppressClick = false;
+      event.preventDefault();
+      return;
+    }
+    suppressClick = false;
+    drawer.classList.toggle("open");
+    positionGLABPanel();
+  });
+  window.addEventListener("resize", positionGLABPanel);
+}
 
 // 将 Base64 解析还原为原生的 Blob 和 File 容器
 async function base64ToFile(base64Data, mimeType, filename) {
@@ -139,11 +266,19 @@ function injectGLABPanel() {
   root.id = "glab-panel-root";
 
   // 悬浮球
-  const floatBall = document.createElement("div");
+  const floatBall = document.createElement("button");
   floatBall.id = "glab-float-ball";
-  floatBall.className = "idle";
-  floatBall.title = "GLAB Agent: 空闲中";
-  floatBall.innerHTML = '<span class="ball-icon">🤖</span><span class="status-indicator"></span>';
+  floatBall.type = "button";
+  floatBall.setAttribute("aria-controls", "glab-drawer");
+  floatBall.setAttribute("aria-expanded", "false");
+  floatBall.innerHTML = `
+    <span class="glab-activity-icon" id="glab-float-icon"></span>
+    <span class="glab-float-copy">
+      <span id="glab-float-label"></span>
+      <span id="glab-float-detail"></span>
+    </span>
+    <span id="glab-float-progress" class="glab-queue-count" hidden></span>
+  `;
 
   // 抽屉面板
   const drawer = document.createElement("div");
@@ -157,6 +292,23 @@ function injectGLABPanel() {
       <button id="glab-close-drawer" title="收起面板">✕</button>
     </div>
     <div class="glab-body">
+      <div id="glab-activity-card" class="glab-section" role="status" aria-live="polite" aria-atomic="true">
+        <div class="glab-activity-heading">
+          <span id="glab-activity-icon" class="glab-activity-icon"></span>
+          <div class="glab-activity-copy">
+            <div class="glab-activity-eyebrow">GLAB · 当前活动</div>
+            <div id="glab-activity-label"></div>
+          </div>
+          <span id="glab-activity-progress" class="glab-queue-count" hidden></span>
+        </div>
+        <div id="glab-activity-detail"></div>
+        <div class="glab-flow" aria-hidden="true">
+          <span data-stage="output">AI 输出</span><span class="glab-flow-arrow">›</span>
+          <span data-stage="execute">本地执行</span><span class="glab-flow-arrow">›</span>
+          <span data-stage="feedback">结果反馈</span>
+        </div>
+        <div id="glab-queue-track" hidden><div id="glab-queue-fill"></div></div>
+      </div>
       <!-- CLI 状态与 Auto-run 控制 -->
       <div class="glab-section glab-status-card">
         <div class="status-item">
@@ -252,74 +404,167 @@ function injectGLABPanel() {
       font-family: ui-monospace, SFMono-Regular, SF Pro Mono, Menlo, Monaco, Consolas, monospace !important;
     }
     
-    /* 悬浮球样式 */
+    #glab-panel-root { --glab-accent: #94a3b8; }
+    #glab-panel-root[data-state="idle"] { --glab-accent: #6ee7b7; }
+    #glab-panel-root[data-state="thinking"],
+    #glab-panel-root[data-state="parsing"],
+    #glab-panel-root[data-state="connecting"] { --glab-accent: #93c5fd; }
+    #glab-panel-root[data-state="executing"] { --glab-accent: #c4b5fd; }
+    #glab-panel-root[data-state="pending"],
+    #glab-panel-root[data-state="waiting"] { --glab-accent: #fcd34d; }
+    #glab-panel-root[data-state="replying"] { --glab-accent: #6ee7b7; }
+    #glab-panel-root[data-state="error"] { --glab-accent: #fca5a5; }
+    #glab-panel-root [hidden] { display: none !important; }
+
+    /* 可读的悬浮状态胶囊 */
     #glab-float-ball {
-      width: 56px;
-      height: 56px;
-      border-radius: 50%;
-      background: rgba(30, 30, 30, 0.7);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
+      box-sizing: border-box;
+      width: 204px;
+      max-width: calc(100vw - 24px);
+      min-height: 48px;
+      padding: 7px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      background: rgba(22, 26, 34, 0.94);
+      color: #f1f5f9;
+      font: inherit;
+      text-align: left;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
       display: flex;
       align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-      transition: all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1);
+      gap: 8px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.24);
+      transition: background 0.2s, border-color 0.2s;
       position: relative;
     }
     #glab-float-ball:hover {
-      transform: scale(1.08) translateY(-2px);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+      background: rgba(30, 35, 45, 0.98);
+      border-color: var(--glab-accent);
     }
-    .ball-icon {
-      font-size: 24px;
+    #glab-float-ball:focus-visible {
+      outline: 2px solid var(--glab-accent);
+      outline-offset: 4px;
     }
-    .status-indicator {
-      width: 12px;
-      height: 12px;
+    #glab-float-ball[data-dragging="true"] { cursor: grabbing; }
+    #glab-panel-root[data-state="idle"] #glab-float-ball {
+      width: 44px;
+      min-height: 44px;
+      padding: 7px;
       border-radius: 50%;
-      position: absolute;
-      right: 2px;
-      bottom: 2px;
-      border: 2px solid rgba(30, 30, 30, 0.8);
-      background: #9ca3af;
-      transition: background 0.3s;
     }
-
-    /* 6 种状态动画 */
-    #glab-float-ball.idle .status-indicator { background: #10b981; animation: glab-breathe-green 2s infinite; }
-    #glab-float-ball.parsing { animation: glab-sweep-blue 1.5s infinite; }
-    #glab-float-ball.parsing .status-indicator { background: #3b82f6; }
-    #glab-float-ball.executing .ball-icon { display: inline-block; animation: glab-rotate-gear 1.5s infinite linear; }
-    #glab-float-ball.executing .status-indicator { background: #8b5cf6; }
-    #glab-float-ball.pending { animation: glab-shake-yellow 0.5s infinite; }
-    #glab-float-ball.pending .status-indicator { background: #f59e0b; }
-    #glab-float-ball.replying .status-indicator { background: #10b981; animation: glab-blink 0.8s infinite; }
-    #glab-float-ball.error { animation: glab-blink-red 1s infinite; }
-    #glab-float-ball.error .status-indicator { background: #ef4444; }
+    #glab-panel-root[data-state="idle"] .glab-float-copy,
+    #glab-panel-root[data-state="idle"] #glab-float-progress { display: none; }
+    #glab-panel-root .glab-activity-icon {
+      width: 36px;
+      height: 36px;
+      flex: 0 0 36px;
+      display: grid;
+      place-items: center;
+      position: relative;
+      color: var(--glab-accent);
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: 50%;
+    }
+    #glab-panel-root .glab-activity-icon svg { width: 19px; height: 19px; }
+    #glab-panel-root #glab-float-icon { width: 28px; height: 28px; flex-basis: 28px; }
+    #glab-panel-root #glab-float-icon svg { width: 16px; height: 16px; }
+    #glab-panel-root .glab-activity-icon::after {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border: 1.5px solid rgba(255, 255, 255, 0.09);
+      border-radius: 50%;
+    }
+    #glab-panel-root[data-state="connecting"] .glab-activity-icon::after,
+    #glab-panel-root[data-state="thinking"] .glab-activity-icon::after,
+    #glab-panel-root[data-state="parsing"] .glab-activity-icon::after,
+    #glab-panel-root[data-state="executing"] .glab-activity-icon::after,
+    #glab-panel-root[data-state="replying"] .glab-activity-icon::after {
+      border-top-color: var(--glab-accent);
+      animation: glab-orbit 1.2s linear infinite;
+    }
+    #glab-panel-root .glab-float-copy,
+    #glab-panel-root .glab-activity-copy { flex: 1; min-width: 0; }
+    #glab-float-label { display: block; font-size: 12px; font-weight: 600; line-height: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #glab-float-detail {
+      display: block;
+      color: #a5afbf;
+      font-size: 10px;
+      line-height: 16px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #glab-panel-root .glab-queue-count {
+      flex-shrink: 0;
+      font: 11px ui-monospace, monospace;
+      color: var(--glab-accent);
+      background: rgba(255, 255, 255, 0.06);
+      padding: 4px 6px;
+      border-radius: 6px;
+    }
+    #glab-panel-root .glab-activity-heading { display: flex; align-items: center; gap: 10px; }
+    #glab-panel-root .glab-activity-eyebrow { color: #94a3b8; font-size: 10px; margin-bottom: 3px; }
+    #glab-activity-label { color: #f1f5f9; font-size: 13px; font-weight: 600; }
+    #glab-activity-detail {
+      margin-top: 10px;
+      color: #a5afbf;
+      font-size: 12px;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    #glab-panel-root .glab-flow { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #8894a7; font-size: 10px; }
+    #glab-panel-root .glab-flow [data-stage] { padding: 4px 6px; border-radius: 5px; }
+    #glab-panel-root[data-state="thinking"] [data-stage="output"],
+    #glab-panel-root[data-state="parsing"] [data-stage="output"],
+    #glab-panel-root[data-state="executing"] [data-stage="execute"],
+    #glab-panel-root[data-state="pending"] [data-stage="execute"],
+    #glab-panel-root[data-state="replying"] [data-stage="feedback"],
+    #glab-panel-root[data-state="waiting"] [data-stage="feedback"] {
+      color: var(--glab-accent);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    #glab-queue-track { height: 3px; background: rgba(255, 255, 255, 0.08); border-radius: 3px; margin-top: 12px; overflow: hidden; }
+    #glab-queue-fill { height: 100%; background: var(--glab-accent); transition: width 0.3s ease; }
 
     /* 抽屉面板样式 */
     #glab-drawer {
       position: fixed;
-      right: -360px;
+      box-sizing: border-box;
+      right: 24px;
       bottom: 96px;
       width: 330px;
+      max-width: calc(100vw - 24px);
       height: 520px;
+      max-height: calc(100dvh - 24px);
       background: rgba(22, 22, 22, 0.75);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border-radius: 16px;
       border: 1px solid rgba(255, 255, 255, 0.08);
       box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-      transition: right 0.4s cubic-bezier(0.165, 0.84, 0.44, 1);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(6px);
+      transition: opacity 0.18s, transform 0.18s, visibility 0.18s;
       display: flex;
       flex-direction: column;
       overflow: hidden;
       color: #e5e7eb;
     }
     #glab-drawer.open {
-      right: 24px;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
     }
     
     .glab-header {
@@ -487,7 +732,6 @@ function injectGLABPanel() {
     .glab-btn.danger:hover { background: #dc2626; }
     .glab-btn.success-pulse {
       background: #10b981;
-      animation: glab-pulse-green 1.5s infinite;
     }
     .glab-btn.success-pulse:hover { background: #059669; }
     .glab-btn.verify { background: #f59e0b; }
@@ -571,42 +815,25 @@ function injectGLABPanel() {
     }
 
     /* CSS 动画 Keyframes */
-    @keyframes glab-breathe-green {
-      0%, 100% { box-shadow: 0 0 6px rgba(16, 185, 129, 0.6); }
-      50% { box-shadow: 0 0 16px rgba(16, 185, 129, 0.9); }
-    }
-    @keyframes glab-sweep-blue {
-      0% { box-shadow: -10px 0 12px rgba(59, 130, 246, 0.5); }
-      50% { box-shadow: 10px 0 12px rgba(59, 130, 246, 0.8); }
-      100% { box-shadow: -10px 0 12px rgba(59, 130, 246, 0.5); }
-    }
-    @keyframes glab-rotate-gear {
+    @keyframes glab-orbit {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
-    @keyframes glab-shake-yellow {
-      0%, 100% { transform: translateX(0) scale(1); box-shadow: 0 0 8px rgba(245, 158, 11, 0.6); }
-      20%, 60% { transform: translateX(-4px) scale(1.02); }
-      40%, 80% { transform: translateX(4px) scale(1.02); }
-    }
-    @keyframes glab-blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
-    }
-    @keyframes glab-blink-red {
-      0%, 100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.6); border-color: rgba(239, 68, 68, 0.8); }
-      50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.9); border-color: rgba(239, 68, 68, 1); }
-    }
-    @keyframes glab-pulse-green {
-      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-      70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    @media (prefers-reduced-motion: reduce) {
+      #glab-panel-root *, #glab-panel-root *::after { animation: none !important; transition: none !important; }
     }
   `;
   document.head.appendChild(style);
+  updatePanelState("connecting", "正在连接本地服务");
 
   // 初始化填入本地存储路径与配置
-  safeGetStorage(["workDir", "skillsDir", "wsPort"], (res) => {
+  safeGetStorage(["workDir", "skillsDir", "wsPort", "glabPanelPosition"], (res) => {
+    const position = res.glabPanelPosition;
+    if (position && Number.isFinite(position.right) && Number.isFinite(position.bottom)) {
+      root.style.right = `${position.right}px`;
+      root.style.bottom = `${position.bottom}px`;
+      positionGLABPanel();
+    }
     if (res.workDir) {
       document.getElementById("glab-input-workdir").value = res.workDir;
       document.getElementById("glab-init-prompt-btn").disabled = false;
@@ -625,9 +852,12 @@ function injectGLABPanel() {
   // ==========================================
   // 事件绑定
   // ==========================================
-  floatBall.addEventListener("click", () => {
-    drawer.classList.toggle("open");
+  bindPanelDragging(root, floatBall, drawer);
+  const drawerObserver = new MutationObserver(() => {
+    floatBall.setAttribute("aria-expanded", String(drawer.classList.contains("open")));
+    positionGLABPanel();
   });
+  drawerObserver.observe(drawer, { attributes: true, attributeFilter: ["class"] });
 
   document.getElementById("glab-close-drawer").addEventListener("click", () => {
     drawer.classList.remove("open");
@@ -667,6 +897,7 @@ function injectGLABPanel() {
       return;
     }
     logToTerminal("正在通过 CLI 唤起本地系统文件夹选择器...");
+    updatePanelState("waiting", "等待选择工作目录", { detail: "请在系统文件夹选择器中选择目录", icon: "folder" });
     const selectId = `select_dir_${Date.now()}`;
     socket.send(
       JSON.stringify({
@@ -715,12 +946,53 @@ function injectGLABPanel() {
   });
 }
 
-function updatePanelState(stateClass, label) {
+function updatePanelState(stateClass, label, { detail, icon, progress = null } = {}) {
+  const defaults = {
+    connecting: ["连接本地代理，请稍候", "relay"],
+    idle: ["等待 AI 的下一条指令", "check"],
+    thinking: ["AI 正在生成回复，完成后解析指令", "clock"],
+    parsing: ["检查最新回复中的 glab-call 指令", "code"],
+    executing: ["本地代理正在处理任务", "terminal"],
+    pending: ["请在面板中批准或拒绝此操作", "pause"],
+    replying: ["将消息回填到当前对话", "send"],
+    waiting: ["内容已回填，请检查后手动发送", "pause"],
+    error: ["打开面板查看详情和运行日志", "alert"],
+  };
+  const [defaultDetail, defaultIcon] = defaults[stateClass] || defaults.idle;
+  const description = detail ?? defaultDetail;
+  const queueLabel = progress ? `${progress.completed + 1} / ${progress.total}` : "";
+  panelState = stateClass;
+  const root = document.getElementById("glab-panel-root");
+  if (root && root.getAttribute("data-state") !== stateClass) root.setAttribute("data-state", stateClass);
   const ball = document.getElementById("glab-float-ball");
   if (ball) {
-    ball.className = stateClass;
-    ball.title = `GLAB Agent: ${label}`;
+    const accessibleLabel = `GLAB · ${label}${queueLabel ? ` · 任务 ${queueLabel}` : ""} · ${description}`;
+    if (ball.title !== accessibleLabel) {
+      ball.title = accessibleLabel;
+      ball.setAttribute("aria-label", accessibleLabel);
+    }
   }
+  for (const prefix of ["float", "activity"]) {
+    const labelEl = document.getElementById(`glab-${prefix}-label`);
+    const detailEl = document.getElementById(`glab-${prefix}-detail`);
+    const iconEl = document.getElementById(`glab-${prefix}-icon`);
+    const progressEl = document.getElementById(`glab-${prefix}-progress`);
+    if (labelEl && labelEl.textContent !== label) labelEl.textContent = label;
+    if (detailEl && detailEl.textContent !== description) detailEl.textContent = description;
+    if (iconEl && iconEl.getAttribute("data-icon") !== (icon || defaultIcon)) {
+      iconEl.innerHTML = panelIcon(icon || defaultIcon);
+      iconEl.setAttribute("data-icon", icon || defaultIcon);
+    }
+    if (progressEl) {
+      progressEl.hidden = !progress;
+      if (progressEl.textContent !== queueLabel) progressEl.textContent = queueLabel;
+    }
+  }
+  const track = document.getElementById("glab-queue-track");
+  const fill = document.getElementById("glab-queue-fill");
+  if (track) track.hidden = !progress;
+  if (fill) fill.style.width = progress ? `${progress.completed / progress.total * 100}%` : "0%";
+  positionGLABPanel();
 }
 
 function logToTerminal(text) {
@@ -786,6 +1058,7 @@ function connectSocket() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
   const url = `ws://127.0.0.1:${wsPort}`;
+  updatePanelState("connecting", "正在连接本地服务", { detail: `127.0.0.1:${wsPort}` });
   socket = new WebSocket(url);
 
   socket.onopen = () => {
@@ -794,7 +1067,7 @@ function connectSocket() {
       statusVal.innerText = "已连接";
       statusVal.className = "status-val online";
     }
-    updatePanelState("idle", "空闲中");
+    updatePanelState("connecting", "正在校验工作目录");
     logToTerminal("连接本地代理服务成功。");
 
     // 握手校验
@@ -823,9 +1096,14 @@ function connectSocket() {
           if (pathInput) {
             pathInput.value = response.data.selectedPath;
             logToTerminal(`已选择工作根目录: ${response.data.selectedPath}`);
+            updatePanelState("idle", "工作目录已选择", { detail: "点击「保存配置」完成连接配置", icon: "folder" });
           }
         } else {
           logToTerminal(`选择目录失败或已取消。`);
+          updatePanelState(response.status === "error" ? "error" : "idle", "目录选择未完成", {
+            detail: response.error || "未选择目录，可重新点击「选择」",
+            icon: "folder",
+          });
         }
         return;
       }
@@ -843,6 +1121,7 @@ function connectSocket() {
           }
 
           if (currentCLIRootDir) {
+            updatePanelState("idle", "已就绪");
             document.getElementById("glab-init-prompt-btn").disabled = false;
             logToTerminal(`双端安全握手成功。工作根目录已锁定: ${currentCLIRootDir}`);
 
@@ -855,12 +1134,14 @@ function connectSocket() {
             logToTerminal("网页消息监听（Observer）已成功激活工作。");
             if (detectRole() === "gpt") logToTerminal(`GPT 输入区“开始语音”按钮：${lastVoiceIdle ? "可见" : "未出现"}。`);
           } else {
+            updatePanelState("waiting", "等待配置工作目录", { detail: "打开面板，选择工作目录并保存", icon: "folder" });
             document.getElementById("glab-init-prompt-btn").disabled = true;
             logToTerminal("连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。");
             observer.disconnect();
           }
         } else {
           logToTerminal(`双端安全握手失败：${response.error}`);
+          updatePanelState("error", "工作目录校验失败", { detail: response.error });
         }
         return;
       }
@@ -885,7 +1166,7 @@ function connectSocket() {
     }
     document.getElementById("glab-init-prompt-btn").disabled = true;
     document.getElementById("glab-verify-btn").disabled = true;
-    updatePanelState("error", "连接断开");
+    updatePanelState("error", "本地服务已断开", { detail: "5 秒后自动重连，请确认本地服务已启动" });
     logToTerminal("与本地代理连接断开，5秒后自动重连...");
 
     // 【核心安全保护】连接断开或未配置时，立刻注销监听器，停止执行任何动作
@@ -948,13 +1229,16 @@ function findSendButton() {
 function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = getConversationId(), deadline = Date.now() + 120000) {
   if (getConversationId() !== conversationId) {
     logToTerminal("对话已切换，取消旧对话的回填。");
+    updatePanelState("idle", "旧对话回填已取消", { detail: "当前对话已切换" });
     return;
   }
   if (isPageGenerating() || isGenerating) {
     if (Date.now() >= deadline) {
       logToTerminal("等待生成结束超时，已取消回填。");
+      updatePanelState("error", "等待 AI 输出超时", { detail: "本次结果未回填，请查看运行日志" });
       return;
     }
+    updatePanelState("thinking", "等待 AI 输出后回填", { detail: "执行结果已收到，等待输入框可用" });
     setTimeout(() => replyToChat(text, filesToPaste, autoSend, conversationId, deadline), 500);
     return;
   }
@@ -965,7 +1249,9 @@ function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = 
     return;
   }
 
-  updatePanelState("replying", autoSend ? "回填并发送中" : "回填完成，等待发送");
+  updatePanelState("replying", filesToPaste.length ? "回填消息与附件" : "正在回填对话", {
+    detail: filesToPaste.length ? `${filesToPaste.length} 个附件 · ${autoSend ? "完成后自动发送" : "完成后等待手动发送"}` : autoSend ? "完成后自动发送给 AI" : "完成后等待手动发送",
+  });
   inputEl.focus();
 
   const isTextarea = inputEl.tagName.toLowerCase() === "textarea";
@@ -988,6 +1274,7 @@ function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = 
     // 将选区明确限定在输入框内，避免焦点失效时选中聊天正文。
     if (document.activeElement !== inputEl && !inputEl.contains(document.activeElement)) {
       logToTerminal("输入框未获得焦点，已取消回填。");
+      updatePanelState("error", "回填已取消", { detail: "输入框未获得焦点，请检查当前页面" });
       return;
     }
     const selection = window.getSelection();
@@ -1031,6 +1318,7 @@ function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = 
   }
 
   if (autoSend) {
+    updatePanelState("replying", "等待发送消息", { detail: "内容已回填，等待页面发送按钮就绪" });
     const sendDelay = filesToPaste && filesToPaste.length > 0 ? 1000 : 500;
     setTimeout(() => {
       let attempts = 0;
@@ -1039,6 +1327,7 @@ function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = 
         if (getConversationId() !== conversationId || !inputEl.isConnected) {
           clearInterval(interval);
           logToTerminal("页面或输入框已切换，自动发送已取消。");
+          updatePanelState("error", "自动发送已取消", { detail: "页面或输入框已切换，请检查结果是否需要手动发送" });
           return;
         }
         // 每次重新查询：SPA 可能替换按钮，也可能把原按钮改成停止按钮。
@@ -1056,19 +1345,19 @@ function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = 
           clearInterval(interval);
           sendButton.click();
           logToTerminal("已点击发送按钮。");
+          updatePanelState("thinking", "等待 AI 回复", { detail: "消息已发送，等待 AI 继续处理" });
           autoRunDepth = 0;
           updateDepthCounter();
         } else if (attempts >= 150) {
           clearInterval(interval);
           logToTerminal("30 秒内未满足安全发送条件，请手动发送。");
+          updatePanelState("waiting", "自动发送超时", { detail: "结果已回填，30 秒内发送按钮未就绪，请手动发送" });
         }
       }, 200);
     }, sendDelay);
   } else {
-    setTimeout(() => {
-      updatePanelState("idle", "已就绪");
-      logToTerminal("回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...");
-    }, 500);
+    updatePanelState("waiting", "等待手动发送");
+    logToTerminal("回填完毕，根据指令 autoSend: false 挂起，等待用户手动确认发送...");
   }
 }
 
@@ -1211,6 +1500,7 @@ function finishQueueExecution(autoSend) {
 // ==========================================
 function scanAndExecuteInstructions() {
   if (isPageGenerating() || isGenerating || isQueueModeActive) return;
+  updatePanelState("parsing", "正在解析指令");
   const scanConversationId = getConversationId();
   logToTerminal("开始扫描最新回复中的待执行指令...");
 
@@ -1219,6 +1509,7 @@ function scanAndExecuteInstructions() {
     if (getConversationId() !== scanConversationId || isPageGenerating() || isGenerating || isQueueModeActive) return;
     const latestReply = getLatestAssistantReply();
     if (!latestReply) {
+      updatePanelState("idle", "等待 AI 回复");
       logToTerminal(`未找到当前页面的 AI 回复容器（轮次: ${document.querySelectorAll('[data-testid^="conversation-turn-"]').length}，代码块: ${document.querySelectorAll('[data-markdown-copy="code-block"]').length}），无法扫描指令。`);
       return;
     }
@@ -1238,6 +1529,7 @@ function scanAndExecuteInstructions() {
       unprocessedBlocks.push(replyContent);
     }
     if (unprocessedBlocks.length === 0) {
+      updatePanelState("idle", "已就绪");
       logToTerminal("最新 AI 回复中未发现可扫描的新指令代码块。");
       return;
     }
@@ -1325,6 +1617,7 @@ function scanAndExecuteInstructions() {
 
     const outputError = document.getElementById("glab-output-error");
     if (hasInvalidInstruction) {
+      updatePanelState("error", "指令格式不完整", { detail: "本次扫描未执行，请在面板中点击「反馈输出中断」" });
       unprocessedBlocks.forEach(block => block.removeAttribute("data-glab-processed"));
       if (outputError) outputError.style.display = "block";
       document.getElementById("glab-drawer")?.classList.add("open");
@@ -1408,7 +1701,7 @@ function handleInstructionFlow(request) {
       autoRunDepth++;
       updateDepthCounter();
     }
-    updatePanelState("executing", "CLI 执行中");
+    updateTaskState(request);
     logToTerminal(`自动投递 [只读]: [${request.action}] ID: ${request.id}`);
     sendRequestToCLI(request);
   } else {
@@ -1417,11 +1710,11 @@ function handleInstructionFlow(request) {
         autoRunDepth++;
         updateDepthCounter();
       }
-      updatePanelState("executing", isApprovedChunk ? "CLI 自动执行中 (分片追加)" : "CLI 自动执行中");
+      updateTaskState(request);
       logToTerminal(`自动投递 [写入${isApprovedChunk ? "分片" : ""}]: [${request.action}] ID: ${request.id}`);
       sendRequestToCLI(request);
     } else {
-      updatePanelState("pending", "等待授权确认");
+      updateTaskState(request, true);
       logToTerminal(`指令挂起等待授权: [${request.action}] ID: ${request.id}`);
       showConfirmUI(request);
     }
@@ -1461,7 +1754,7 @@ function showConfirmUI(request) {
 
   document.getElementById("glab-btn-approve").onclick = () => {
     diffContainer.style.display = "none";
-    updatePanelState("executing", "授权指令执行中");
+    updateTaskState(request);
     logToTerminal(`用户已批准指令: ${request.id}`);
 
     // 如果是分片写入的第 0 片被批准，将路径记录到 approvedChunkPaths 中
@@ -1637,6 +1930,7 @@ function scheduleReplyScan(reply, snapshot, conversationId, waitForCompletion = 
     if (waitForCompletion) {
       if (currentReply === lastObservedReply && currentReply?.textContent === lastObservedReplyText) {
         isGenerating = false;
+        if (panelState === "thinking" || panelState === "parsing") updatePanelState("idle", "已就绪");
         logToTerminal("页面输出已结束，但未发现新的 AI 回复；不会扫描旧回复。");
         return;
       }
@@ -1647,6 +1941,7 @@ function scheduleReplyScan(reply, snapshot, conversationId, waitForCompletion = 
     }
     if (!currentReply) {
       isGenerating = false;
+      if (panelState === "thinking" || panelState === "parsing") updatePanelState("idle", "等待 AI 回复");
       logToTerminal(`页面输出已结束，但未找到 AI 回复容器（轮次: ${document.querySelectorAll('[data-testid^="conversation-turn-"]').length}，代码块: ${document.querySelectorAll('[data-markdown-copy="code-block"]').length}）。`);
       return;
     }
@@ -1674,7 +1969,9 @@ const observer = new MutationObserver((mutations) => {
   if (generatingSignal) {
     if (!isGenerating) logToTerminal(`检测到 AI 正在生成回复（标记: ${generatingSignal}），等待输出完成。`);
     isGenerating = true;
-    updatePanelState("parsing", "等待输出完成");
+    if (!["executing", "pending", "replying", "error"].includes(panelState)) {
+      updatePanelState("thinking", "AI 正在生成回复");
+    }
     const reply = getLatestAssistantReply();
     scheduleReplyScan(reply, reply?.textContent, getConversationId(), true);
     return;
