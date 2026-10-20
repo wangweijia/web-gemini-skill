@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -46,6 +47,15 @@ function request(ws, payload) {
   });
 }
 
+function httpStatus(url, headers) {
+  return new Promise((resolve, reject) => {
+    http.get(url, { headers }, response => {
+      response.resume();
+      resolve(response.statusCode);
+    }).on('error', reject);
+  });
+}
+
 test('local server accepts ChatGPT and rejects unrelated browser origins', { timeout: 10000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glab-server-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -55,6 +65,44 @@ test('local server accepts ChatGPT and rejects unrelated browser origins', { tim
   assert.equal(reply.status, 'success');
 
   await assert.rejects(connect(port, 'https://unrelated.example'), /403/);
+});
+
+test('GPT snapshots reach the read-only local ACP viewer without a filesystem root', { timeout: 10000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glab-acp-server-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { ws, port } = await startServer(t, root);
+  const base = `http://127.0.0.1:${port}`;
+  const payload = {
+    id: 'acp_preview_test', action: 'acp_preview_capture',
+    params: { conversationId: 'conversation_1', messages: [{ messageId: 'm1', text: '<script>alert(1)</script>\n```glab-call\n{"action":"run_command"}\n```' }] },
+  };
+  assert.equal((await request(ws, payload)).status, 'error');
+  await request(ws, { action: 'shakehand', params: { role: 'gpt' } });
+  const exported = await request(ws, payload);
+  assert.equal(exported.status, 'success');
+  assert.equal(exported.data.messageCount, 1);
+  const response = await fetch(`${base}/acp-preview/messages`);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.get('access-control-allow-origin'), null);
+  const [record] = await response.json();
+  assert.equal(record.messages[0].params.update.content.text, payload.params.messages[0].text);
+  assert.equal(record.messages[0].method, 'session/update');
+  assert.equal(record.messages[0].id, undefined);
+  const page = await fetch(`${base}/acp-preview`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.match(await page.text(), /GLAB ACP/);
+  assert.equal(await httpStatus(`${base}/acp-preview`, {
+    'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+  }), 200);
+  const script = await fetch(`${base}/acp-preview.js`);
+  assert.equal(script.status, 200);
+  assert.doesNotMatch(await script.text(), /innerHTML/);
+  assert.equal((await fetch(`${base}/acp-preview/messages`, { headers: { Origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await fetch(`${base}/acp-preview/messages`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+  assert.equal(await httpStatus(`${base}/acp-preview/messages`, { Host: `evil.example:${port}` }), 403);
+  assert.equal((await fetch(`${base}/acp-preview/messages`, { method: 'POST' })).status, 405);
+  assert.equal((await fetch(`${base}/does-not-exist`)).status, 404);
 });
 
 test('home-relative handshake paths resolve before filesystem access and invalid settings leave the root locked', { timeout: 10000 }, async (t) => {

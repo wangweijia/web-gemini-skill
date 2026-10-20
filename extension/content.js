@@ -30,6 +30,45 @@ let queueResultsCollector = []; // 已执行完的子任务结果汇总
 let isQueueModeActive = false; // 是否处于队列执行模式
 let queueFilesToPaste = []; // 待粘贴的文件队列
 let panelState = "connecting";
+let acpExportPending = null;
+
+function finishACPExport(message) {
+  if (acpExportPending) clearTimeout(acpExportPending.timer);
+  acpExportPending = null;
+  const button = document.getElementById("glab-acp-export-btn");
+  if (button) button.disabled = false;
+  const status = document.getElementById("glab-acp-export-status");
+  if (status) status.textContent = message;
+  logToTerminal(message);
+}
+
+function exportGPTToACP() {
+  if (acpExportPending) return;
+  try {
+    if (detectRole() !== "gpt") throw new Error("当前原型仅支持 ChatGPT 页面");
+    if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("本地 CLI 未连接");
+    if (isPageGenerating() || isGenerating) throw new Error("请等待 GPT 输出结束后再导出");
+    let messages = GLABChatExport.extractReplies(document);
+    if (document.getElementById("glab-acp-latest").checked) messages = messages.slice(-1);
+    if (!messages.length) throw new Error("未找到已加载的 AI 回复，请确认当前对话包含 GPT 回答");
+    if (messages.length > 200) throw new Error("已加载回复超过 200 条，请改为仅导出最新回复");
+    const params = { conversationId: getConversationId(), messages };
+    if (new TextEncoder().encode(JSON.stringify(params)).length > 1024 * 1024) {
+      throw new Error("导出超过 1 MiB，请改为仅导出最新回复");
+    }
+    if (!window.confirm(`将 ${messages.length} 条 AI 回复导出到本机 ACP 预览页。可能含敏感信息，仅保留在本地服务内存中。是否继续？`)) return;
+    const id = `acp_preview_${Date.now()}`;
+    const timer = setTimeout(() => {
+      finishACPExport("ACP 导出超时，请更新 CLI 后重试；预览页可能已收到快照。");
+    }, 10000);
+    acpExportPending = { id, timer };
+    document.getElementById("glab-acp-export-btn").disabled = true;
+    document.getElementById("glab-acp-export-status").textContent = "正在导出到本机…";
+    socket.send(JSON.stringify({ id, action: "acp_preview_capture", params }));
+  } catch (error) {
+    finishACPExport(`ACP 导出失败：${error.message}`);
+  }
+}
 
 function formatConfigPath(value) {
   const input = value.trim().replace(/^～/, "~");
@@ -383,6 +422,13 @@ function injectGLABPanel() {
           </div>
           <div id="glab-output-error" role="status" style="display: none; margin-top: 8px;">指令不完整或格式无效，本次扫描未执行指令。可点击“反馈输出中断”让 AI 缩短后重试。
           </div>
+          <div class="action-buttons" style="margin-top: 8px;">
+            <button id="glab-acp-export-btn" class="glab-btn primary">导出 GPT → ACP</button>
+            <button id="glab-acp-preview-btn" class="glab-btn primary">查看 ACP 消息</button>
+          </div>
+          <label><input type="checkbox" id="glab-acp-latest" checked> 仅最新 AI 回复（取消则导出全部已加载回复）</label>
+          <div class="glab-path-hint">只读快照，不发送给模型、不执行指令；无需初始化对话规则。</div>
+          <div id="glab-acp-export-status" role="status"></div>
         </div>
       </div>
 
@@ -899,6 +945,11 @@ function injectGLABPanel() {
     replyToChat("【GLAB 用户反馈】上一条命令输出可能被截断、消失或格式无效。请检查已有执行反馈，不要假定未收到成功反馈的操作已经完成，也不要盲目重跑有副作用的命令。普通短指令仍可批量发送。但对于一个过长命令拆出的各块，必须线性分轮：本轮只输出当前块，结束回复，等它执行成功后才生成并运行下一块，禁止一次输出该长命令的多个分块。文件 content 使用 write_file_chunk，每片缩短至之前的一半（最多 1000 字符且最多 20 行）。如果需要改变已有分片内容或总数，请用新的 transferId，从第 0 片重新发送整个文件；该长命令的后续分块必须等待当前块执行成功后再生成。", [], true);
   });
 
+  document.getElementById("glab-acp-preview-btn").addEventListener("click", () => {
+    window.open(`http://127.0.0.1:${wsPort}/acp-preview`, "_blank", "noopener,noreferrer");
+  });
+  document.getElementById("glab-acp-export-btn").addEventListener("click", exportGPTToACP);
+
   document.getElementById("glab-verify-btn").addEventListener("click", () => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       logToTerminal("错误：WebSocket 未连接，无法触发校验");
@@ -1123,6 +1174,14 @@ function connectSocket() {
     try {
       const response = JSON.parse(event.data);
 
+      if (typeof response.id === "string" && response.id.startsWith("acp_preview_")) {
+        if (response.id !== acpExportPending?.id) return;
+        finishACPExport(response.status === "success"
+          ? `已导出 ${response.data.messageCount} 条回复。点击「查看 ACP 消息」查看。`
+          : `ACP 导出失败：${response.error}`);
+        return;
+      }
+
       // 处理系统选择目录回调
       if (response.id && response.id.startsWith("select_dir_")) {
         if (response.status === "success" && response.data.selectedPath) {
@@ -1211,6 +1270,7 @@ function connectSocket() {
 
   connection.onclose = () => {
     if (socket !== connection) return;
+    if (acpExportPending) finishACPExport("ACP 导出中断：本地服务已断开，请重试。");
     const statusVal = document.getElementById("glab-cli-status");
     if (statusVal) {
       statusVal.innerText = "未连接";

@@ -43,7 +43,7 @@ test('installed bundle contains its own runtime, code and dependency', (t) => {
   const support = path.join(root, 'support');
   const runtime = path.join(root, 'node-runtime');
   fs.mkdirSync(path.join(source, 'node_modules', 'ws'), { recursive: true });
-  for (const name of ['server.js', 'service.js', 'origins.js', 'chunk-writer.js', 'skill-authoring.js', 'skills-directory.js', 'config-paths.js', 'package.json']) {
+  for (const name of ['server.js', 'service.js', 'origins.js', 'chunk-writer.js', 'skill-authoring.js', 'skills-directory.js', 'config-paths.js', 'acp-preview.js', 'acp-preview.html', 'acp-preview-client.js', 'package.json']) {
     fs.writeFileSync(path.join(source, name), name);
   }
   fs.writeFileSync(path.join(source, 'node_modules', 'ws', 'package.json'), '{}');
@@ -53,5 +53,8 @@ test('installed bundle contains its own runtime, code and dependency', (t) => {
   assert.equal(fs.readFileSync(path.join(stage, 'bin', 'node'), 'utf8'), 'runtime');
   assert.equal(fs.readFileSync(path.join(stage, 'server.js'), 'utf8'), 'server.js');
   assert.equal(fs.readFileSync(path.join(stage, 'config-paths.js'), 'utf8'), 'config-paths.js');
+  for (const name of ['acp-preview.js', 'acp-preview.html', 'acp-preview-client.js']) {
+    assert.equal(fs.readFileSync(path.join(stage, name), 'utf8'), name);
+  }
   assert.equal(fs.readFileSync(path.join(stage, 'node_modules', 'ws', 'package.json'), 'utf8'), '{}');
 });

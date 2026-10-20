@@ -89,6 +89,27 @@ function harness(initialStorage = {}) {
   };
 }
 
+test('ACP capture acknowledgments and disconnects never enter the model feedback path', () => {
+  const h = harness();
+  h.handshake({ homeDir: '/Users/test', workDir: '', skillsDir: '/Users/test/.glab-skills' });
+  h.run('acpExportPending = { id: "acp_preview_1", timer: 1 }');
+  h.socket.message({ id: 'acp_preview_1', status: 'success', data: { messageCount: 2 } });
+  assert.match(h.element('acp-export-status').textContent, /已导出 2/);
+  assert.equal(h.element('acp-export-btn').disabled, false);
+  assert.equal(h.feedback.length, 0);
+  h.run('acpExportPending = { id: "acp_preview_2", timer: 1 }');
+  h.socket.message({ id: 'acp_preview_1', status: 'error', error: 'late response' });
+  assert.equal(h.run('acpExportPending.id'), 'acp_preview_2');
+  h.socket.message({ id: 'acp_preview_2', status: 'error', error: 'unsupported capture' });
+  assert.match(h.element('acp-export-status').textContent, /unsupported capture/);
+  assert.equal(h.feedback.length, 0);
+  h.run('acpExportPending = { id: "acp_preview_3", timer: 1 }');
+  h.socket.finishClose();
+  assert.match(h.element('acp-export-status').textContent, /已断开/);
+  assert.equal(h.run('acpExportPending'), null);
+  assert.equal(h.feedback.length, 0);
+});
+
 test('existing absolute configurations migrate to home shorthand only after the CLI supplies its home', () => {
   const h = harness({ workDir: '/Users/test/Project Space', skillsDir: '/Users/test/.glab-skills' });
   h.handshake({ homeDir: '/Users/test', workDir: '/Users/test/Project Space', skillsDir: '/Users/test/.glab-skills' });

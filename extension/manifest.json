@@ -20,9 +20,8 @@
         "https://gemini.google.com/*",
         "https://chatgpt.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["chat-export.js", "content.js"],
       "run_at": "document_end"
     }
   ]
 }
-

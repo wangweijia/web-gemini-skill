@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GLAB ACP Preview</title>
+  <style>
+    :root { color-scheme: light dark; font: 15px/1.6 system-ui, sans-serif; }
+    body { max-width: 1200px; margin: 32px auto; padding: 0 20px; }
+    h1 { margin-bottom: 4px; } p { margin-top: 4px; }
+    #status { padding: 10px; border: 1px solid #888; border-radius: 6px; }
+    article { border: 1px solid #888; border-radius: 8px; margin: 20px 0; padding: 16px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: light-dark(#f4f5f7, #202329); border-radius: 6px; }
+    button { cursor: pointer; padding: 6px 12px; margin: 0 8px 8px 0; }
+    .meta { overflow-wrap: anywhere; opacity: .8; }
+  </style>
+  <script src="/acp-preview.js" defer></script>
+</head>
+<body>
+  <h1>GLAB ACP 消息预览</h1>
+  <p>在 GPT 的 GLAB 面板中点击「导出 GPT → ACP」。这里只查看手动导出的快照，不调用模型、不执行指令。</p>
+  <p>每次导出创建独立的预览 sessionId，仅展示 ACP 输出通知；未实现 initialize、session/new 或完整 ACP 会话。</p>
+  <p>仅当前页面已加载的 AI 回复；不含用户消息、隐藏历史或完整附件。最多保留 20 次 / 8 MiB，服务重启清空。</p>
+  <div id="status" role="status">正在连接本地服务…</div>
+  <main id="captures"></main>
+</body>
+</html>

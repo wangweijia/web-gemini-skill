@@ -7,6 +7,7 @@ const { isAllowedOrigin } = require("./origins");
 const { prepareSkill, installSkill } = require("./skill-authoring");
 const { resolveConfigPath } = require("./config-paths");
 const writeChunk = require("./chunk-writer").createChunkWriter();
+const acpPreview = require("./acp-preview").createPreview();
 
 // ==========================================
 // 命令行参数解析
@@ -153,7 +154,8 @@ function runCodeInSandbox(codeToRun, ctx) {
 // ==========================================
 // WebSocket 服务启动
 // ==========================================
-const httpServer = http.createServer((_request, response) => {
+const httpServer = http.createServer((request, response) => {
+  if (acpPreview.handleHttp(request, response)) return;
   response.writeHead(404);
   response.end();
 });
@@ -199,6 +201,17 @@ wss.on("connection", (ws) => {
 
     const { id, action, params } = request;
     const ctx = connContexts.get(ws);
+
+    if (action === "acp_preview_capture") {
+      try {
+        const data = acpPreview.capture(params, ctx);
+        ws.send(JSON.stringify({ id, action, status: "success", data }));
+      } catch (err) {
+        console.error(`[GLAB CLI] ACP 预览导出失败: ${err.message}`);
+        ws.send(JSON.stringify({ id, action, status: "error", error: err.message }));
+      }
+      return;
+    }
 
     // 握手：按连接独立锁定工作目录，同时注册角色到 clients 路由表
     if (action === "shakehand") {

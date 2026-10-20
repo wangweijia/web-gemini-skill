@@ -9,7 +9,7 @@ const { expandHomePath } = require("./config-paths");
 
 const LABEL = "com.glab.local-agent";
 const DEFAULT_PORT = 9003;
-const BUNDLE_FILES = ["server.js", "service.js", "origins.js", "chunk-writer.js", "skill-authoring.js", "skills-directory.js", "config-paths.js", "package.json"];
+const BUNDLE_FILES = ["server.js", "service.js", "origins.js", "chunk-writer.js", "skill-authoring.js", "skills-directory.js", "config-paths.js", "acp-preview.js", "acp-preview.html", "acp-preview-client.js", "package.json"];
 
 function servicePaths(homeDir = os.homedir()) {
   const supportDir = path.join(homeDir, "Library", "Application Support", "GLAB");
