@@ -18,4 +18,6 @@ test('new installations use generic directory, old installations retain skills, 
   assert.equal(resolveDefaultSkillsDir(home), preferred);
   assert.equal(resolveDefaultSkillsDir(home, legacy), legacy);
   assert.equal(fs.readFileSync(path.join(legacy, 'existing.txt'), 'utf8'), 'preserved');
+  assert.equal(resolveDefaultSkillsDir(home, '~/Custom Skills'), path.join(home, 'Custom Skills'));
+  assert.equal(resolveDefaultSkillsDir(home, '～/Custom Skills'), path.join(home, 'Custom Skills'));
 });

@@ -5,6 +5,7 @@ const vm = require("vm");
 const http = require("http");
 const { isAllowedOrigin } = require("./origins");
 const { prepareSkill, installSkill } = require("./skill-authoring");
+const { resolveConfigPath } = require("./config-paths");
 const writeChunk = require("./chunk-writer").createChunkWriter();
 
 // ==========================================
@@ -201,19 +202,30 @@ wss.on("connection", (ws) => {
 
     // 握手：按连接独立锁定工作目录，同时注册角色到 clients 路由表
     if (action === "shakehand") {
-      ctx.safeRoot = params && params.workDir ? path.resolve(params.workDir.trim()) : "";
-      ctx.skillsDir = params && params.skillsDir ? path.resolve(params.skillsDir.trim()) : defaultSkillsDir;
-      ctx.role = params && params.role ? params.role.trim() : "";
-      if (ctx.role) clients.set(ctx.role, ws);
+      try {
+        const homeDir = os.homedir();
+        const workDir = params?.workDir;
+        const skillsDir = params?.skillsDir;
+        const safeRoot = workDir == null || (typeof workDir === "string" && !workDir.trim())
+          ? "" : resolveConfigPath(workDir, homeDir);
+        const resolvedSkillsDir = skillsDir == null || (typeof skillsDir === "string" && !skillsDir.trim())
+          ? defaultSkillsDir : resolveConfigPath(skillsDir, homeDir);
+        ctx.safeRoot = safeRoot;
+        ctx.skillsDir = resolvedSkillsDir;
+        ctx.role = params && params.role ? params.role.trim() : "";
+        if (ctx.role) clients.set(ctx.role, ws);
 
-      console.log(`[GLAB CLI] 握手 [${ctx.role || "未知角色"}]：workDir=${ctx.safeRoot || "未指定"}，skillsDir=${ctx.skillsDir}`);
-      ws.send(
-        JSON.stringify({
+        console.log(`[GLAB CLI] 握手 [${ctx.role || "未知角色"}]：workDir=${ctx.safeRoot || "未指定"}，skillsDir=${ctx.skillsDir}`);
+        ws.send(JSON.stringify({
           action: "shakehand_reply",
           status: "success",
-          data: { workDir: ctx.safeRoot, skillsDir: ctx.skillsDir },
-        }),
-      );
+          data: { workDir: ctx.safeRoot, skillsDir: ctx.skillsDir, homeDir },
+        }));
+      } catch (err) {
+        ctx.safeRoot = "";
+        console.error(`[GLAB CLI] 目录配置失败: ${err.message}`);
+        ws.send(JSON.stringify({ action: "shakehand_reply", status: "error", error: err.message }));
+      }
       return;
     }
 

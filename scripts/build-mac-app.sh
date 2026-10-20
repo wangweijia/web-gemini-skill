@@ -20,7 +20,7 @@ mkdir -p "${repo_root}/dist/.swift-module-cache"
 cp "${repo_root}/mac/Info.plist" "${contents}/Info.plist"
 cp "${node_path}" "${contents}/Resources/runtime/node"
 chmod 755 "${contents}/Resources/runtime/node"
-for filename in server.js service.js origins.js chunk-writer.js skill-authoring.js skills-directory.js package.json; do
+for filename in server.js service.js origins.js chunk-writer.js skill-authoring.js skills-directory.js config-paths.js package.json; do
   cp "${repo_root}/cli/${filename}" "${contents}/Resources/cli/${filename}"
 done
 cp -R "${repo_root}/cli/node_modules" "${contents}/Resources/cli/"

@@ -5,10 +5,11 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { expandHomePath } = require("./config-paths");
 
 const LABEL = "com.glab.local-agent";
 const DEFAULT_PORT = 9003;
-const BUNDLE_FILES = ["server.js", "service.js", "origins.js", "chunk-writer.js", "skill-authoring.js", "skills-directory.js", "package.json"];
+const BUNDLE_FILES = ["server.js", "service.js", "origins.js", "chunk-writer.js", "skill-authoring.js", "skills-directory.js", "config-paths.js", "package.json"];
 
 function servicePaths(homeDir = os.homedir()) {
   const supportDir = path.join(homeDir, "Library", "Application Support", "GLAB");
@@ -71,7 +72,7 @@ function parseOptions(argv) {
       options.port = Number(flag.slice(7));
       if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error("无效的服务端口");
     } else if (flag.startsWith("--skills-dir=")) {
-      options.skillsDir = flag.slice(13);
+      options.skillsDir = expandHomePath(flag.slice(13));
       if (!path.isAbsolute(options.skillsDir)) throw new Error("Skills 目录必须是绝对路径");
     } else {
       throw new Error(`未知参数: ${flag}`);

@@ -31,6 +31,9 @@ test('service options reject invalid ports and relative skill paths', () => {
   assert.throws(() => parseOptions(['install', '--port=0']), /无效/);
   assert.throws(() => parseOptions(['install', '--skills-dir=relative']), /绝对路径/);
   assert.throws(() => parseOptions(['status', '--port=9004']), /仅在 install/);
+  assert.equal(parseOptions(['install', '--skills-dir=~/Custom Skills']).skillsDir, path.join(os.homedir(), 'Custom Skills'));
+  assert.equal(parseOptions(['install', '--skills-dir=～/Custom Skills']).skillsDir, path.join(os.homedir(), 'Custom Skills'));
+  assert.throws(() => parseOptions(['install', '--skills-dir=~someone/Skills']), /仅支持/);
 });
 
 test('installed bundle contains its own runtime, code and dependency', (t) => {
@@ -40,7 +43,7 @@ test('installed bundle contains its own runtime, code and dependency', (t) => {
   const support = path.join(root, 'support');
   const runtime = path.join(root, 'node-runtime');
   fs.mkdirSync(path.join(source, 'node_modules', 'ws'), { recursive: true });
-  for (const name of ['server.js', 'service.js', 'origins.js', 'chunk-writer.js', 'skill-authoring.js', 'skills-directory.js', 'package.json']) {
+  for (const name of ['server.js', 'service.js', 'origins.js', 'chunk-writer.js', 'skill-authoring.js', 'skills-directory.js', 'config-paths.js', 'package.json']) {
     fs.writeFileSync(path.join(source, name), name);
   }
   fs.writeFileSync(path.join(source, 'node_modules', 'ws', 'package.json'), '{}');
@@ -49,5 +52,6 @@ test('installed bundle contains its own runtime, code and dependency', (t) => {
   fs.rmSync(source, { recursive: true });
   assert.equal(fs.readFileSync(path.join(stage, 'bin', 'node'), 'utf8'), 'runtime');
   assert.equal(fs.readFileSync(path.join(stage, 'server.js'), 'utf8'), 'server.js');
+  assert.equal(fs.readFileSync(path.join(stage, 'config-paths.js'), 'utf8'), 'config-paths.js');
   assert.equal(fs.readFileSync(path.join(stage, 'node_modules', 'ws', 'package.json'), 'utf8'), '{}');
 });

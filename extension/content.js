@@ -15,6 +15,8 @@ let isAutoRunEnabled = true;
 let isAutoVerifyEnabled = false;
 let pendingAutoVerify = false; // one-shot flag set after queue completes, triggers verify on next idle AI turn
 let currentCLIRootDir = ""; // 暂存由本地 CLI 握手发送过来的根工作目录
+let currentCLISkillsDir = "";
+let currentCLIHomeDir = "";
 let currentConvId = ""; // 当前对话的唯一标识
 let currentConvExecutedIds = new Set(); // 当前对话已执行过的指令 ID 强缓存 Set
 
@@ -28,6 +30,22 @@ let queueResultsCollector = []; // 已执行完的子任务结果汇总
 let isQueueModeActive = false; // 是否处于队列执行模式
 let queueFilesToPaste = []; // 待粘贴的文件队列
 let panelState = "connecting";
+
+function formatConfigPath(value) {
+  const input = value.trim().replace(/^～/, "~");
+  if (!currentCLIHomeDir) return input;
+  const home = currentCLIHomeDir.replace(/\/+$/, "") || "/";
+  if (input === home || input.replace(/\/+$/, "") === home) return "~";
+  const prefix = home.endsWith("/") ? home : `${home}/`;
+  return input.startsWith(prefix) ? `~/${input.slice(prefix.length)}` : input;
+}
+
+function setConfigurationReady(ready) {
+  for (const id of ["glab-init-prompt-btn", "glab-verify-btn"]) {
+    const button = document.getElementById(id);
+    if (button) button.disabled = !ready;
+  }
+}
 
 const panelIcons = {
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
@@ -342,13 +360,14 @@ function injectGLABPanel() {
           <div class="input-group">
             <label for="glab-input-workdir">工作根目录 (必填)</label>
             <div style="display: flex; gap: 8px; width: 100%;">
-              <input type="text" id="glab-input-workdir" style="flex: 1;" placeholder="例如: /Users/username/project">
+              <input type="text" id="glab-input-workdir" style="flex: 1;" placeholder="例如: ~/project">
               <button id="glab-select-dir-btn" class="glab-btn primary" style="flex: 0 0 64px; padding: 0 8px; height: 28px; line-height: 28px;">📂 选择</button>
             </div>
           </div>
           <div class="input-group">
             <label for="glab-input-skillsdir">Skills 目录 (选填)</label>
-            <input type="text" id="glab-input-skillsdir" placeholder="例如: /Users/username/.glab-skills">
+            <input type="text" id="glab-input-skillsdir" placeholder="留空使用 CLI 默认目录，例如 ~/.glab-skills">
+            <span class="glab-path-hint">~ 表示当前用户主目录，也支持绝对路径。</span>
           </div>
           <div class="input-group">
             <label for="glab-input-wsport">WS 服务端口</label>
@@ -680,6 +699,7 @@ function injectGLABPanel() {
       font-size: 11px;
       color: #9ca3af;
     }
+    #glab-panel-root .glab-path-hint { font-size: 10px; color: #9ca3af; line-height: 1.5; }
     .path-display {
       background: rgba(0, 0, 0, 0.4);
       border: 1px solid rgba(255, 255, 255, 0.1);
@@ -835,12 +855,10 @@ function injectGLABPanel() {
       positionGLABPanel();
     }
     if (res.workDir) {
-      document.getElementById("glab-input-workdir").value = res.workDir;
-      document.getElementById("glab-init-prompt-btn").disabled = false;
-      document.getElementById("glab-verify-btn").disabled = false;
+      document.getElementById("glab-input-workdir").value = formatConfigPath(res.workDir);
     }
     if (res.skillsDir) {
-      document.getElementById("glab-input-skillsdir").value = res.skillsDir;
+      document.getElementById("glab-input-skillsdir").value = formatConfigPath(res.skillsDir);
     }
     wsPort = res.wsPort || 9003;
     document.getElementById("glab-input-wsport").value = wsPort;
@@ -908,8 +926,8 @@ function injectGLABPanel() {
   });
 
   document.getElementById("glab-save-config-btn").addEventListener("click", () => {
-    const workDir = document.getElementById("glab-input-workdir").value.trim();
-    const skillsDir = document.getElementById("glab-input-skillsdir").value.trim();
+    const workDir = formatConfigPath(document.getElementById("glab-input-workdir").value);
+    const skillsDir = formatConfigPath(document.getElementById("glab-input-skillsdir").value);
     const wsPortInput = document.getElementById("glab-input-wsport").value.trim();
     const port = wsPortInput ? parseInt(wsPortInput, 10) : 9003;
 
@@ -923,26 +941,26 @@ function injectGLABPanel() {
     }
 
     wsPort = port;
+    document.getElementById("glab-input-workdir").value = workDir;
+    document.getElementById("glab-input-skillsdir").value = skillsDir;
+    setConfigurationReady(false);
 
     safeSetStorage({ workDir, skillsDir, wsPort }, () => {
       logToTerminal(`配置已保存！工作目录: ${workDir}, 端口: ${wsPort}`);
-      document.getElementById("glab-init-prompt-btn").disabled = false;
-      document.getElementById("glab-verify-btn").disabled = false;
       if (socket) socket.close();
       connectSocket();
     });
   });
 
   document.getElementById("glab-init-prompt-btn").addEventListener("click", () => {
-    safeGetStorage(["workDir", "skillsDir"], (res) => {
-      if (!res.workDir) {
-        alert("错误：请先设置工作目录！");
-        return;
-      }
-      const prompt = generateInitPrompt(res.workDir, res.skillsDir);
-      replyToChat(prompt);
-      drawer.classList.remove("open");
-    });
+    if (!currentCLIRootDir || !socket || socket.readyState !== WebSocket.OPEN) {
+      logToTerminal("请先连接本地服务，并保存配置完成工作目录校验。");
+      updatePanelState("error", "工作目录尚未就绪", { detail: "连接 CLI 并保存配置后，再初始化对话规则" });
+      return;
+    }
+    const prompt = generateInitPrompt(currentCLIRootDir, currentCLISkillsDir);
+    replyToChat(prompt);
+    drawer.classList.remove("open");
   });
 }
 
@@ -1057,11 +1075,22 @@ function detectRole() {
 function connectSocket() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
+  currentCLIRootDir = "";
+  currentCLISkillsDir = "";
+  currentCLIHomeDir = "";
+  setConfigurationReady(false);
+  observer.disconnect();
+  if (generateTimer) clearTimeout(generateTimer);
+  generateTimer = null;
+  isGenerating = false;
   const url = `ws://127.0.0.1:${wsPort}`;
   updatePanelState("connecting", "正在连接本地服务", { detail: `127.0.0.1:${wsPort}` });
-  socket = new WebSocket(url);
+  const connection = new WebSocket(url);
+  socket = connection;
+  let requestedHomePaths = false;
 
-  socket.onopen = () => {
+  connection.onopen = () => {
+    if (socket !== connection) return;
     const statusVal = document.getElementById("glab-cli-status");
     if (statusVal) {
       statusVal.innerText = "已连接";
@@ -1072,12 +1101,16 @@ function connectSocket() {
 
     // 握手校验
     safeGetStorage(["workDir", "skillsDir"], (res) => {
-      socket.send(
+      if (socket !== connection || connection.readyState !== WebSocket.OPEN) return;
+      const workDir = formatConfigPath(res.workDir || "");
+      const skillsDir = formatConfigPath(res.skillsDir || "");
+      requestedHomePaths = workDir.startsWith("~") || skillsDir.startsWith("~");
+      connection.send(
         JSON.stringify({
           action: "shakehand",
           params: {
-            workDir: res.workDir || "",
-            skillsDir: res.skillsDir || "",
+            workDir,
+            skillsDir,
             role: detectRole(),
           },
         }),
@@ -1085,7 +1118,8 @@ function connectSocket() {
     });
   };
 
-  socket.onmessage = (event) => {
+  connection.onmessage = (event) => {
+    if (socket !== connection) return;
     try {
       const response = JSON.parse(event.data);
 
@@ -1094,7 +1128,8 @@ function connectSocket() {
         if (response.status === "success" && response.data.selectedPath) {
           const pathInput = document.getElementById("glab-input-workdir");
           if (pathInput) {
-            pathInput.value = response.data.selectedPath;
+            pathInput.value = formatConfigPath(response.data.selectedPath);
+            pathInput.title = response.data.selectedPath;
             logToTerminal(`已选择工作根目录: ${response.data.selectedPath}`);
             updatePanelState("idle", "工作目录已选择", { detail: "点击「保存配置」完成连接配置", icon: "folder" });
           }
@@ -1109,24 +1144,41 @@ function connectSocket() {
       }
 
       if (response.action === "shakehand_reply") {
+        currentCLIRootDir = "";
+        currentCLISkillsDir = "";
+        setConfigurationReady(false);
+        observer.disconnect();
         if (response.status === "success") {
-          currentCLIRootDir = response.data.workDir || "";
-
-          // 同步从 CLI 获取到的 skillsDir 到 UI 面板和本地存储中
-          const cliSkillsDir = response.data.skillsDir || "";
-          const skillsDirInput = document.getElementById("glab-input-skillsdir");
-          if (skillsDirInput && cliSkillsDir) {
-            skillsDirInput.value = cliSkillsDir;
-            safeSetStorage({ skillsDir: cliSkillsDir });
+          if (requestedHomePaths && !response.data.homeDir) {
+            logToTerminal("当前 CLI 不支持 ~ 路径，请更新并重启本地服务后重新连接。");
+            updatePanelState("error", "本地服务需要更新", { detail: "当前 CLI 不支持 ~ 路径，请更新并重启服务" });
+            return;
           }
+          currentCLIHomeDir = response.data.homeDir || "";
+          currentCLIRootDir = response.data.workDir || "";
+          currentCLISkillsDir = response.data.skillsDir || "";
+          const config = {
+            workDir: formatConfigPath(currentCLIRootDir),
+            skillsDir: formatConfigPath(currentCLISkillsDir),
+          };
+          for (const [key, id, resolved] of [
+            ["workDir", "glab-input-workdir", currentCLIRootDir],
+            ["skillsDir", "glab-input-skillsdir", currentCLISkillsDir],
+          ]) {
+            const input = document.getElementById(id);
+            if (input) {
+              input.value = config[key];
+              input.title = resolved;
+            }
+          }
+          safeSetStorage(config);
 
           if (currentCLIRootDir) {
             updatePanelState("idle", "已就绪");
-            document.getElementById("glab-init-prompt-btn").disabled = false;
+            setConfigurationReady(true);
             logToTerminal(`双端安全握手成功。工作根目录已锁定: ${currentCLIRootDir}`);
 
             // 【核心安全保护】只有握手锁定成功后，才挂载 Observer 开始监听页面消息
-            observer.disconnect(); // 防止重复观察
             lastObservedReply = getLatestAssistantReply();
             lastObservedReplyText = lastObservedReply?.textContent || "";
             lastVoiceIdle = isChatGPTVoiceIdle();
@@ -1137,7 +1189,6 @@ function connectSocket() {
             updatePanelState("waiting", "等待配置工作目录", { detail: "打开面板，选择工作目录并保存", icon: "folder" });
             document.getElementById("glab-init-prompt-btn").disabled = true;
             logToTerminal("连接已建立，但本地工作目录尚未设置。请在面板中配置并保存或点击“选择”按钮。");
-            observer.disconnect();
           }
         } else {
           logToTerminal(`双端安全握手失败：${response.error}`);
@@ -1158,20 +1209,24 @@ function connectSocket() {
     }
   };
 
-  socket.onclose = () => {
+  connection.onclose = () => {
+    if (socket !== connection) return;
     const statusVal = document.getElementById("glab-cli-status");
     if (statusVal) {
       statusVal.innerText = "未连接";
       statusVal.className = "status-val offline";
     }
-    document.getElementById("glab-init-prompt-btn").disabled = true;
-    document.getElementById("glab-verify-btn").disabled = true;
+    setConfigurationReady(false);
     updatePanelState("error", "本地服务已断开", { detail: "5 秒后自动重连，请确认本地服务已启动" });
     logToTerminal("与本地代理连接断开，5秒后自动重连...");
 
     // 【核心安全保护】连接断开或未配置时，立刻注销监听器，停止执行任何动作
     observer.disconnect();
+    if (generateTimer) clearTimeout(generateTimer);
+    generateTimer = null;
+    isGenerating = false;
     currentCLIRootDir = "";
+    currentCLISkillsDir = "";
 
     setTimeout(connectSocket, 5000);
   };
