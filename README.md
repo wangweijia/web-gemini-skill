@@ -211,6 +211,8 @@ AI 创建 Skill 前应先调用只读命令 `prepare_skill`，等待它返回当
 | `load_skill` | 加载指定技能脚本的入口内容与文档 | `name` (string, 必填) |
 | `run_skill` | 触发执行指定技能脚本，并传递参数 | `name` (string, 必填), `args` (object, 可选) |
 
+`run_command` 非零退出时，GLAB 会将执行失败、退出码、标准输出和标准错误回填到网页对话；如果正在串行执行一批指令，后续指令会标记为未执行。反馈默认自动发送，`autoSend: false` 时仅回填，等待手动发送。
+
 ---
 
 ## ⚖️ 安全机制

@@ -57,6 +57,27 @@ test('local server accepts ChatGPT and rejects unrelated browser origins', { tim
   await assert.rejects(connect(port, 'https://unrelated.example'), /403/);
 });
 
+test('shell exit status determines success while preserving stdout, stderr and autoSend', { timeout: 10000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glab-command-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { ws } = await startServer(t, root);
+  const handshake = await request(ws, { action: 'shakehand', params: { workDir: root, role: 'gpt' } });
+  assert.equal(handshake.status, 'success');
+
+  const run = (id, command) => request(ws, { id, action: 'run_command', autoSend: false, params: { command } });
+  const failed = await run('failed', 'printf partial; printf diagnostic >&2; exit 7');
+  assert.equal(failed.id, 'failed');
+  assert.equal(failed.action, 'run_command');
+  assert.equal(failed.status, 'error');
+  assert.equal(failed.autoSend, false);
+  assert.match(failed.error, /退出码: 7/);
+  assert.deepEqual(failed.data, { stdout: 'partial', stderr: 'diagnostic', exitCode: 7 });
+
+  const succeeded = await run('succeeded', 'printf done; printf warning >&2');
+  assert.equal(succeeded.status, 'success');
+  assert.deepEqual(succeeded.data, { stdout: 'done', stderr: 'warning', exitCode: 0 });
+});
+
 test('home-relative handshake paths resolve before filesystem access and invalid settings leave the root locked', { timeout: 10000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glab-home-server-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

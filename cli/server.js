@@ -249,7 +249,7 @@ wss.on("connection", (ws) => {
       ws.send(JSON.stringify({ id, action, autoSend: request.autoSend, status: "success", data: result }));
     } catch (err) {
       console.error(`[GLAB CLI] 执行失败 [${action}] ID: ${id}: ${err.message}`);
-      ws.send(JSON.stringify({ id, action, autoSend: request.autoSend, status: "error", error: err.message }));
+      ws.send(JSON.stringify({ id, action, autoSend: request.autoSend, status: "error", error: err.message, data: err.data }));
     }
   });
 
@@ -465,7 +465,10 @@ async function executeAction(action, params, ctx) {
           (error, stdout, stderr) => {
             clearTimeout(timer);
             if (error) {
-              resolve({ stdout, stderr, exitCode: error.code || 1, error: error.message });
+              const exitCode = typeof error.code === "number" ? error.code : null;
+              const failure = new Error(exitCode === null ? error.message : `Shell 命令执行失败 (退出码: ${exitCode})。`);
+              failure.data = { stdout, stderr, exitCode };
+              reject(failure);
             } else {
               resolve({ stdout, stderr, exitCode: 0 });
             }

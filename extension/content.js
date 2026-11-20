@@ -1416,9 +1416,24 @@ function replyToChat(text, filesToPaste = [], autoSend = true, conversationId = 
   }
 }
 
+function formatExecutionFailure({ error, data }) {
+  let text = `执行状态: 失败\n原因: ${error}`;
+  if (data) text += `\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
+  return text;
+}
+
 // 处理 CLI 返回的数据
 async function handleCLIResponse(response) {
-  const { id, action, status, data, error, autoSend } = response;
+  // 旧版 CLI 把 Shell 执行失败封装在 success 响应里。
+  if (response.action === "run_command" && response.status === "success" && response.data &&
+      (response.data.error || response.data.exitCode !== 0)) {
+    response = {
+      ...response,
+      status: "error",
+      error: response.data.error || `Shell 命令执行失败 (退出码: ${response.data.exitCode})。`,
+    };
+  }
+  const { id, action, status, data, autoSend } = response;
   logToTerminal(`收到执行结果 [${id}]: ${status} (autoSend: ${autoSend})`);
 
   // 分片写入自动授权缓存的清理
@@ -1487,7 +1502,7 @@ async function handleCLIResponse(response) {
         replyToChat(feedbackText, [], shouldAutoSend);
       }
     } else {
-      feedbackText += `执行状态: 失败\n原因: ${error}`;
+      feedbackText += formatExecutionFailure(response);
       replyToChat(feedbackText, [], shouldAutoSend);
     }
   }
@@ -1520,7 +1535,7 @@ function finishQueueExecution(autoSend) {
     if (res.status === "success") {
       feedbackText += `执行状态: 成功\n\`\`\`json\n${JSON.stringify(res.data, null, 2)}\n\`\`\`\n\n`;
     } else {
-      feedbackText += `执行状态: 失败\n原因: ${res.error}\n\n`;
+      feedbackText += `${formatExecutionFailure(res)}\n\n`;
     }
   });
 

@@ -249,6 +249,53 @@ test('manual feedback remains in a non-loading state instead of becoming idle', 
   assert.equal(h.timers.length, 0);
 });
 
+test('single command failure is inserted and sent back to the chat', async () => {
+  const h = harness();
+  const sentToChat = [];
+  h.context.sendButton = {
+    isConnected: true, disabled: false, hasAttribute() { return false; },
+    getAttribute() { return ''; }, closest() { return null; },
+    click() { sentToChat.push(h.context.input.value); },
+  };
+  await h.run(`
+    findSendButton = () => sendButton;
+    handleCLIResponse({
+      id: "shell", action: "run_command", status: "error", error: "Shell 命令执行失败 (退出码: 7)。",
+      data: { stdout: "partial output", stderr: "command diagnostic", exitCode: 7 }
+    })
+  `);
+  h.timers.pop()();
+  h.intervals.pop()();
+  assert.equal(sentToChat.length, 1);
+  assert.match(sentToChat[0], /指令ID: shell\n执行状态: 失败/);
+  assert.match(sentToChat[0], /"stdout": "partial output"/);
+  assert.match(sentToChat[0], /"stderr": "command diagnostic"/);
+  assert.match(sentToChat[0], /"exitCode": 7/);
+});
+
+test('legacy CLI command failure aborts the queue and honors manual feedback', async () => {
+  const h = harness();
+  await h.run(`
+    isQueueModeActive = true;
+    activeTaskQueue = [
+      { id: "shell", action: "run_command", params: { command: "exit 7" } },
+      { id: "dependent", action: "list_dir", params: { path: "." } }
+    ];
+    executeNextQueueTask();
+    handleCLIResponse({
+      id: "shell", action: "run_command", status: "success", autoSend: false,
+      data: { error: "command failed", stdout: "", stderr: "command diagnostic", exitCode: 7 }
+    })
+  `);
+  assert.deepEqual(Array.from(h.context.sent, request => request.id), ['shell']);
+  assert.equal(h.run('isQueueModeActive'), false);
+  assert.match(h.context.input.value, /执行状态: 失败\n原因: command failed/);
+  assert.match(h.context.input.value, /"stderr": "command diagnostic"/);
+  assert.match(h.context.input.value, /未执行子任务[\s\S]*dependent \(list_dir\)/);
+  assert.equal(h.element('float-label').textContent, '等待手动发送');
+  assert.equal(h.timers.length, 0);
+});
+
 test('sending switches to AI waiting while a timeout stops loading', () => {
   const h = harness();
   h.context.sendButton = {
