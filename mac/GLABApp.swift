@@ -31,7 +31,7 @@ final class GLABAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let icon = NSImage(systemSymbolName: "terminal", accessibilityDescription: "GLAB 本地代理服务")
+        let icon = NSImage(systemSymbolName: "link", accessibilityDescription: "GLAB 本地代理服务")
         icon?.isTemplate = true
         statusItem.button?.image = icon
         statusItem.button?.imagePosition = .imageOnly
